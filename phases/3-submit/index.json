@@ -1,0 +1,8 @@
+{
+  "project": "ddingdone",
+  "phase": "3-submit",
+  "steps": [
+    { "step": 0, "name": "build-validate", "status": "pending" },
+    { "step": 1, "name": "review-checklist", "status": "pending" }
+  ]
+}

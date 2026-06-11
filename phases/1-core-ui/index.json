@@ -1,0 +1,9 @@
+{
+  "project": "ddingdone",
+  "phase": "1-core-ui",
+  "steps": [
+    { "step": 0, "name": "onboarding-home", "status": "pending" },
+    { "step": 1, "name": "meeting-flow", "status": "pending" },
+    { "step": 2, "name": "expense-settle-ui", "status": "pending" }
+  ]
+}

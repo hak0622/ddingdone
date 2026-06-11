@@ -1,0 +1,11 @@
+{
+  "project": "ddingdone",
+  "phase": "2-logic",
+  "steps": [
+    { "step": 0, "name": "settle-algorithm", "status": "pending" },
+    { "step": 1, "name": "firebase-hooks", "status": "pending" },
+    { "step": 2, "name": "photo-upload", "status": "pending" },
+    { "step": 3, "name": "invite-deeplink", "status": "pending" },
+    { "step": 4, "name": "settle-deeplink", "status": "pending" }
+  ]
+}

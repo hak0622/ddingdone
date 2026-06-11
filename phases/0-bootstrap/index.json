@@ -1,0 +1,8 @@
+{
+  "project": "ddingdone",
+  "phase": "0-bootstrap",
+  "steps": [
+    { "step": 0, "name": "firebase-setup", "status": "pending" },
+    { "step": 1, "name": "router-layout", "status": "pending" }
+  ]
+}

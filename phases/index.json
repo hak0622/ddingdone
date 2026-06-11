@@ -1,0 +1,8 @@
+{
+  "phases": [
+    { "dir": "0-bootstrap", "status": "pending" },
+    { "dir": "1-core-ui", "status": "pending" },
+    { "dir": "2-logic", "status": "pending" },
+    { "dir": "3-submit", "status": "pending" }
+  ]
+}
