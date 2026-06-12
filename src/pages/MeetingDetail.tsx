@@ -1,5 +1,9 @@
+import { useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { FixedBottomCTA, Top } from '@toss/tds-mobile'
+import { doc, updateDoc } from 'firebase/firestore'
+import { db } from '../lib/firebase'
+import { uploadImage } from '../lib/cloudinary'
 import { useMeeting } from '../hooks/useMeeting'
 
 function formatKRW(amount: number): string {
@@ -10,6 +14,23 @@ export default function MeetingDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { meeting, members, expenses, loading } = useMeeting(id)
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file || !id) return
+    setUploading(true)
+    try {
+      const url = await uploadImage(file)
+      await updateDoc(doc(db, 'meetings', id), { photoUrl: url })
+    } catch (err) {
+      console.error('사진 업로드 실패', err)
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
 
   if (loading) {
     return (
@@ -72,6 +93,14 @@ export default function MeetingDetail() {
         title={<Top.TitleParagraph size={22}>{meeting.name}</Top.TitleParagraph>}
       />
 
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: 'none' }}
+        onChange={handleFileChange}
+      />
+
       {meeting.photoUrl ? (
         <img
           src={meeting.photoUrl}
@@ -90,22 +119,29 @@ export default function MeetingDetail() {
             gap: 12,
           }}
         >
-          <p style={{ fontSize: 14, color: '#888', margin: 0 }}>
-            오늘을 대표할 사진을 추가해보세요
-          </p>
-          <button
-            onClick={() => console.log('사진 추가 — Phase 2에서 구현')}
-            style={{
-              padding: '8px 16px',
-              fontSize: 13,
-              border: '1px solid #ccc',
-              borderRadius: 8,
-              background: '#fff',
-              cursor: 'pointer',
-            }}
-          >
-            사진 추가
-          </button>
+          {uploading ? (
+            <p style={{ fontSize: 14, color: '#888', margin: 0 }}>업로드 중...</p>
+          ) : (
+            <>
+              <p style={{ fontSize: 14, color: '#888', margin: 0 }}>
+                오늘을 대표할 사진을 추가해보세요
+              </p>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: 13,
+                  border: '1px solid #ccc',
+                  borderRadius: 8,
+                  background: '#fff',
+                  cursor: 'pointer',
+                }}
+              >
+                사진 추가
+              </button>
+            </>
+          )}
         </div>
       )}
 

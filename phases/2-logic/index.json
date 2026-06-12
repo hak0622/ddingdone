@@ -16,12 +16,15 @@
       "status": "completed",
       "started_at": "2026-06-12T18:09:06+0900",
       "summary": "useMeeting/useMeetings 훅 생성, MeetingNew/Home/MeetingDetail/ExpenseInput Firebase 연동 완료",
-      "completed_at": "2026-06-12T18:30:00+0900"
+      "completed_at": "2026-06-12T18:11:48+0900"
     },
     {
       "step": 2,
       "name": "photo-upload",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-06-12T18:11:48+0900",
+      "summary": "cloudinary.ts 업로드 함수 + MeetingDetail 사진 추가 기능 연동 완료",
+      "completed_at": "2026-06-12T18:20:00+0900"
     },
     {
       "step": 3,
