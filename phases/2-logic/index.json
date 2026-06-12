@@ -24,12 +24,15 @@
       "status": "completed",
       "started_at": "2026-06-12T18:11:48+0900",
       "summary": "cloudinary.ts 업로드 함수 + MeetingDetail 사진 추가 기능 연동 완료",
-      "completed_at": "2026-06-12T18:20:00+0900"
+      "completed_at": "2026-06-12T18:13:25+0900"
     },
     {
       "step": 3,
       "name": "invite-deeplink",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-06-12T18:13:25+0900",
+      "summary": "초대 링크 공유(bridge.shareInviteLink) + 참여자 등록 흐름 구현 완료",
+      "completed_at": "2026-06-12T18:16:00+0900"
     },
     {
       "step": 4,
