@@ -1,10 +1,12 @@
 import { useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { FixedBottomCTA, Top } from '@toss/tds-mobile'
-import { doc, updateDoc } from 'firebase/firestore'
+import { doc, updateDoc, setDoc, deleteDoc } from 'firebase/firestore'
 import { db } from '../lib/firebase'
 import { uploadImage } from '../lib/cloudinary'
+import { shareInviteLink } from '../lib/bridge'
 import { useMeeting } from '../hooks/useMeeting'
+import { useUserStore } from '../store/userStore'
 
 function formatKRW(amount: number): string {
   return `${amount.toLocaleString('ko-KR')}원`
@@ -14,8 +16,45 @@ export default function MeetingDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { meeting, members, expenses, loading } = useMeeting(id)
+  const { uid } = useUserStore()
   const [uploading, setUploading] = useState(false)
+  const [joinNickname, setJoinNickname] = useState('')
+  const [joining, setJoining] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  async function handleShare() {
+    if (!id) return
+    try {
+      await shareInviteLink(id)
+    } catch (err) {
+      console.error('공유 실패', err)
+    }
+  }
+
+  async function claimPreMember(preUid: string, nickname: string) {
+    if (!id || !uid) return
+    setJoining(true)
+    try {
+      await setDoc(doc(db, 'meetings', id, 'members', uid), { nickname })
+      await deleteDoc(doc(db, 'meetings', id, 'members', preUid))
+    } catch (err) {
+      console.error('참여 실패', err)
+    } finally {
+      setJoining(false)
+    }
+  }
+
+  async function joinAsNew() {
+    if (!id || !uid || !joinNickname.trim()) return
+    setJoining(true)
+    try {
+      await setDoc(doc(db, 'meetings', id, 'members', uid), { nickname: joinNickname.trim() })
+    } catch (err) {
+      console.error('참여 실패', err)
+    } finally {
+      setJoining(false)
+    }
+  }
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -78,6 +117,84 @@ export default function MeetingDetail() {
           >
             홈으로
           </button>
+        </div>
+      </>
+    )
+  }
+
+  const isNotMember = !loading && !!uid && !members[uid]
+  const preMembers = Object.entries(members).filter(([memberUid]) => memberUid.startsWith('pre_'))
+
+  if (isNotMember) {
+    return (
+      <>
+        <Top title={<Top.TitleParagraph size={22}>{meeting.name}</Top.TitleParagraph>} />
+        <div style={{ padding: '24px 20px' }}>
+          <p style={{ fontSize: 16, fontWeight: 600, margin: '0 0 20px' }}>
+            이 정산방에 참여하시겠어요?
+          </p>
+
+          {preMembers.length > 0 && (
+            <div style={{ marginBottom: 28 }}>
+              <p style={{ fontSize: 13, color: '#888', margin: '0 0 12px' }}>
+                기존 참여자 중 나를 선택하세요
+              </p>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {preMembers.map(([preUid, nickname]) => (
+                  <button
+                    key={preUid}
+                    onClick={() => claimPreMember(preUid, nickname)}
+                    disabled={joining}
+                    style={{
+                      padding: '8px 16px',
+                      fontSize: 14,
+                      border: '1px solid #d8d8d8',
+                      borderRadius: 20,
+                      background: '#f5f5f5',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {nickname}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div>
+            <p style={{ fontSize: 13, color: '#888', margin: '0 0 8px' }}>새 닉네임으로 참여</p>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                value={joinNickname}
+                onChange={(e) => setJoinNickname(e.target.value)}
+                placeholder="닉네임 입력"
+                style={{
+                  flex: 1,
+                  padding: '10px 14px',
+                  fontSize: 14,
+                  border: '1px solid #d8d8d8',
+                  borderRadius: 8,
+                  outline: 'none',
+                }}
+              />
+              <button
+                onClick={joinAsNew}
+                disabled={joining || !joinNickname.trim()}
+                style={{
+                  padding: '10px 16px',
+                  fontSize: 14,
+                  fontWeight: 600,
+                  border: 'none',
+                  borderRadius: 8,
+                  background: joinNickname.trim() ? '#000' : '#d8d8d8',
+                  color: '#fff',
+                  cursor: joinNickname.trim() ? 'pointer' : 'default',
+                }}
+              >
+                참여하기
+              </button>
+            </div>
+          </div>
         </div>
       </>
     )
@@ -227,7 +344,7 @@ export default function MeetingDetail() {
             정산 결과 보기
           </button>
           <button
-            onClick={() => console.log('초대 링크 공유 — Phase 2에서 shareInviteLink 연결')}
+            onClick={handleShare}
             style={{
               flex: 1,
               padding: '14px 0',
