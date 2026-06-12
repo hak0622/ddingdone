@@ -7,12 +7,16 @@
       "name": "onboarding-home",
       "status": "completed",
       "started_at": "2026-06-12T17:33:46+0900",
-      "summary": "Onboarding(TextField+FixedBottomCTA), Home(빈상태/목록 분기) UI 구현 완료"
+      "summary": "Onboarding(TextField+FixedBottomCTA), Home(빈상태/목록 분기) UI 구현 완료",
+      "completed_at": "2026-06-12T17:36:36+0900"
     },
     {
       "step": 1,
       "name": "meeting-flow",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-06-12T17:36:37+0900",
+      "summary": "MeetingNew(폼 4개), MeetingDetail(사진/참여자/비용/버튼 레이아웃) UI 구현 완료",
+      "completed_at": "2026-06-12T18:05:00+0900"
     },
     {
       "step": 2,
