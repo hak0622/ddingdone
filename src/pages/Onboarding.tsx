@@ -1,9 +1,43 @@
-import { Top } from '@toss/tds-mobile'
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { FixedBottomCTA, TextField, Top } from '@toss/tds-mobile'
+import { useUserStore } from '../store/userStore'
+
+const NICKNAME_KEY = 'ddingdone_nickname'
 
 export default function Onboarding() {
+  const navigate = useNavigate()
+  const { uid, setUser } = useUserStore()
+  const [nickname, setNickname] = useState('')
+
+  function handleStart() {
+    if (nickname.trim().length === 0) return
+    localStorage.setItem(NICKNAME_KEY, nickname.trim())
+    setUser(uid, nickname.trim())
+    navigate('/', { replace: true })
+  }
+
   return (
     <>
-      <Top title={<Top.TitleParagraph size={22}>띵돈</Top.TitleParagraph>} />
+      <Top title={<Top.TitleParagraph size={22}>닉네임 설정</Top.TitleParagraph>} />
+      <div style={{ padding: '32px 20px 0' }}>
+        <p style={{ fontSize: 18, fontWeight: 600, marginBottom: 24 }}>
+          반가워요! 어떻게 불러드릴까요?
+        </p>
+        <TextField
+          variant="big"
+          label="닉네임"
+          placeholder="예: 민수"
+          value={nickname}
+          onChange={(e) => setNickname(e.target.value)}
+        />
+      </div>
+      <FixedBottomCTA.Single
+        disabled={nickname.trim().length === 0}
+        onClick={handleStart}
+      >
+        시작하기
+      </FixedBottomCTA.Single>
     </>
   )
 }
