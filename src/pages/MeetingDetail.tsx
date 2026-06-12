@@ -1,14 +1,6 @@
 import { useNavigate, useParams } from 'react-router-dom'
 import { FixedBottomCTA, Top } from '@toss/tds-mobile'
-
-const meeting = {
-  name: '제주도 여행',
-  date: '2026.06.11',
-  memo: '제주 2박 3일',
-  photoUrl: null as string | null,
-}
-const members: Record<string, string> = { uid1: '민수', uid2: '지현' }
-const expenses: Array<{ id: string; amount: number; paidBy: string; memo: string }> = []
+import { useMeeting } from '../hooks/useMeeting'
 
 function formatKRW(amount: number): string {
   return `${amount.toLocaleString('ko-KR')}원`
@@ -17,6 +9,58 @@ function formatKRW(amount: number): string {
 export default function MeetingDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const { meeting, members, expenses, loading } = useMeeting(id)
+
+  if (loading) {
+    return (
+      <>
+        <Top title={<Top.TitleParagraph size={22}>정산방</Top.TitleParagraph>} />
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: 'calc(100vh - 56px)',
+          }}
+        >
+          <p style={{ fontSize: 14, color: '#8b8b8b', margin: 0 }}>불러오는 중...</p>
+        </div>
+      </>
+    )
+  }
+
+  if (!meeting) {
+    return (
+      <>
+        <Top title={<Top.TitleParagraph size={22}>정산방</Top.TitleParagraph>} />
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: 'calc(100vh - 56px)',
+            gap: 16,
+          }}
+        >
+          <p style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>정산방을 찾을 수 없어요</p>
+          <button
+            onClick={() => navigate('/')}
+            style={{
+              padding: '10px 20px',
+              fontSize: 14,
+              border: '1px solid #d8d8d8',
+              borderRadius: 8,
+              background: '#fff',
+              cursor: 'pointer',
+            }}
+          >
+            홈으로
+          </button>
+        </div>
+      </>
+    )
+  }
 
   const memberList = Object.values(members)
   const totalAmount = expenses.reduce((sum, e) => sum + e.amount, 0)
@@ -25,10 +69,9 @@ export default function MeetingDetail() {
   return (
     <>
       <Top
-        title={<Top.TitleParagraph size={22}>{meeting.name || '정산방'}</Top.TitleParagraph>}
+        title={<Top.TitleParagraph size={22}>{meeting.name}</Top.TitleParagraph>}
       />
 
-      {/* 대표 사진 영역 */}
       {meeting.photoUrl ? (
         <img
           src={meeting.photoUrl}
@@ -66,14 +109,12 @@ export default function MeetingDetail() {
         </div>
       )}
 
-      {/* 정보 영역 */}
       <div style={{ padding: '20px 20px 0' }}>
         <p style={{ fontSize: 14, color: '#555', margin: '0 0 8px' }}>
           {meeting.date}
           {meeting.memo ? ` · ${meeting.memo}` : ''}
         </p>
 
-        {/* 참여자 칩 */}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
           {memberList.map((name) => (
             <span
@@ -91,7 +132,6 @@ export default function MeetingDetail() {
           ))}
         </div>
 
-        {/* 총 지출 / 1인당 */}
         <div style={{ display: 'flex', gap: 24, marginBottom: 24 }}>
           <div>
             <p style={{ fontSize: 12, color: '#888', margin: '0 0 2px' }}>총 지출</p>
@@ -103,7 +143,6 @@ export default function MeetingDetail() {
           </div>
         </div>
 
-        {/* 비용 목록 */}
         <div style={{ marginBottom: 16 }}>
           {expenses.length === 0 ? (
             <p style={{ fontSize: 14, color: '#aaa', textAlign: 'center', padding: '24px 0' }}>
@@ -135,7 +174,6 @@ export default function MeetingDetail() {
           )}
         </div>
 
-        {/* 정산 결과 보기 + 초대 링크 공유 */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 100 }}>
           <button
             onClick={() => navigate(`/meetings/${id}/settle`)}
@@ -170,9 +208,9 @@ export default function MeetingDetail() {
         </div>
       </div>
 
-      <FixedBottomCTA.Single onClick={() => navigate(`/meetings/${id}/expense`)}>
+      <FixedBottomCTA onClick={() => navigate(`/meetings/${id}/expense`)}>
         내가 낸 비용 추가
-      </FixedBottomCTA.Single>
+      </FixedBottomCTA>
     </>
   )
 }

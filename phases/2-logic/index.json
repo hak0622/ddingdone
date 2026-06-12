@@ -7,12 +7,16 @@
       "name": "settle-algorithm",
       "status": "completed",
       "started_at": "2026-06-12T18:06:59+0900",
-      "summary": "settle.ts Splitwise 알고리즘 + 단위테스트 구현 완료"
+      "summary": "settle.ts Splitwise 알고리즘 + 단위테스트 구현 완료",
+      "completed_at": "2026-06-12T18:09:06+0900"
     },
     {
       "step": 1,
       "name": "firebase-hooks",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-06-12T18:09:06+0900",
+      "summary": "useMeeting/useMeetings 훅 생성, MeetingNew/Home/MeetingDetail/ExpenseInput Firebase 연동 완료",
+      "completed_at": "2026-06-12T18:30:00+0900"
     },
     {
       "step": 2,

@@ -1,5 +1,9 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { FixedBottomCTA, TextField, Top } from '@toss/tds-mobile'
+import { collection, addDoc, setDoc, doc, serverTimestamp } from 'firebase/firestore'
+import { db } from '../lib/firebase'
+import { useUserStore } from '../store/userStore'
 
 function getTodayString(): string {
   const d = new Date()
@@ -9,15 +13,58 @@ function getTodayString(): string {
   return `${yyyy}.${mm}.${dd}`
 }
 
+async function createMeeting(
+  fields: { name: string; date: string; members: string; memo: string },
+  uid: string,
+  nickname: string
+): Promise<string> {
+  const meetingRef = await addDoc(collection(db, 'meetings'), {
+    name: fields.name.trim(),
+    date: fields.date,
+    memo: fields.memo,
+    createdBy: uid,
+    createdAt: serverTimestamp(),
+    photoUrl: null,
+  })
+
+  await setDoc(doc(db, 'meetings', meetingRef.id, 'members', uid), {
+    nickname,
+  })
+
+  const names = fields.members
+    .split(',')
+    .map((n) => n.trim())
+    .filter((n) => n.length > 0 && n !== nickname)
+
+  for (const name of names) {
+    const preId = `pre_${Math.random().toString(36).slice(2, 9)}`
+    await setDoc(doc(db, 'meetings', meetingRef.id, 'members', preId), {
+      nickname: name,
+    })
+  }
+
+  return meetingRef.id
+}
+
 export default function MeetingNew() {
+  const navigate = useNavigate()
+  const { uid, nickname } = useUserStore()
+
   const [name, setName] = useState('')
   const [date, setDate] = useState(getTodayString())
   const [members, setMembers] = useState('')
   const [memo, setMemo] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
-  function handleSubmit() {
-    if (name.trim().length === 0) return
-    console.log({ name: name.trim(), date, members, memo })
+  async function handleSubmit() {
+    if (name.trim().length === 0 || submitting) return
+    setSubmitting(true)
+    try {
+      const meetingId = await createMeeting({ name, date, members, memo }, uid, nickname)
+      navigate(`/meetings/${meetingId}`)
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -54,12 +101,12 @@ export default function MeetingNew() {
           onChange={(e) => setMemo(e.target.value)}
         />
       </div>
-      <FixedBottomCTA.Single
-        disabled={name.trim().length === 0}
+      <FixedBottomCTA
+        disabled={name.trim().length === 0 || submitting}
         onClick={handleSubmit}
       >
-        정산방 만들기
-      </FixedBottomCTA.Single>
+        {submitting ? '생성 중...' : '정산방 만들기'}
+      </FixedBottomCTA>
     </>
   )
 }
