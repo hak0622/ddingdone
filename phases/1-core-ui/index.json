@@ -2,8 +2,23 @@
   "project": "ddingdone",
   "phase": "1-core-ui",
   "steps": [
-    { "step": 0, "name": "onboarding-home", "status": "pending" },
-    { "step": 1, "name": "meeting-flow", "status": "pending" },
-    { "step": 2, "name": "expense-settle-ui", "status": "pending" }
-  ]
+    {
+      "step": 0,
+      "name": "onboarding-home",
+      "status": "completed",
+      "started_at": "2026-06-12T17:33:46+0900",
+      "summary": "Onboarding(TextField+FixedBottomCTA), Home(빈상태/목록 분기) UI 구현 완료"
+    },
+    {
+      "step": 1,
+      "name": "meeting-flow",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "expense-settle-ui",
+      "status": "pending"
+    }
+  ],
+  "created_at": "2026-06-12T17:33:46+0900"
 }
