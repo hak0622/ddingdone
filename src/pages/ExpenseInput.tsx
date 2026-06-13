@@ -45,7 +45,10 @@ export default function ExpenseInput() {
 
   return (
     <>
-      <Top title={<Top.TitleParagraph size={22}>비용 추가</Top.TitleParagraph>} />
+      <Top
+        title={<Top.TitleParagraph size={22}>비용 추가</Top.TitleParagraph>}
+        right={<Top.RightButton onClick={() => navigate(-1)}>닫기</Top.RightButton>}
+      />
       <div style={{ padding: '0 20px 100px', display: 'flex', flexDirection: 'column', gap: 16 }}>
         <TextField
           variant="big"

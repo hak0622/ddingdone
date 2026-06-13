@@ -208,6 +208,7 @@ export default function MeetingDetail() {
     <>
       <Top
         title={<Top.TitleParagraph size={22}>{meeting.name}</Top.TitleParagraph>}
+        right={<Top.RightButton onClick={() => navigate(-1)}>닫기</Top.RightButton>}
       />
 
       <input

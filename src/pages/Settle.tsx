@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { FixedBottomCTA, Top } from '@toss/tds-mobile'
 import { useMeeting } from '../hooks/useMeeting'
 import { calculateSettlements, type Settlement } from '../utils/settle'
@@ -11,6 +11,7 @@ function formatKRW(amount: number): string {
 }
 
 export default function Settle() {
+  const navigate = useNavigate()
   const { id: meetingId } = useParams<{ id: string }>()
   const { uid } = useUserStore()
   const { meeting, members, expenses, loading } = useMeeting(meetingId)
@@ -51,7 +52,10 @@ export default function Settle() {
 
   return (
     <>
-      <Top title={<Top.TitleParagraph size={22}>정산 결과</Top.TitleParagraph>} />
+      <Top
+        title={<Top.TitleParagraph size={22}>정산 결과</Top.TitleParagraph>}
+        right={<Top.RightButton onClick={() => navigate(-1)}>닫기</Top.RightButton>}
+      />
 
       <div style={{ paddingBottom: 100 }}>
         {/* 대표 사진 영역 */}

@@ -1,8 +1,23 @@
 {
   "phases": [
-    { "dir": "0-bootstrap", "status": "pending" },
-    { "dir": "1-core-ui", "status": "pending" },
-    { "dir": "2-logic", "status": "pending" },
-    { "dir": "3-submit", "status": "pending" }
+    {
+      "dir": "0-bootstrap",
+      "status": "completed",
+      "completed_at": "2026-06-12T17:31:28+0900"
+    },
+    {
+      "dir": "1-core-ui",
+      "status": "completed",
+      "completed_at": "2026-06-12T17:44:26+0900"
+    },
+    {
+      "dir": "2-logic",
+      "status": "completed",
+      "completed_at": "2026-06-12T18:18:35+0900"
+    },
+    {
+      "dir": "3-submit",
+      "status": "pending"
+    }
   ]
 }

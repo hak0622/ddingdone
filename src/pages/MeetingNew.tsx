@@ -71,6 +71,7 @@ export default function MeetingNew() {
     <>
       <Top
         title={<Top.TitleParagraph size={22}>새 정산방</Top.TitleParagraph>}
+        right={<Top.RightButton onClick={() => navigate(-1)}>닫기</Top.RightButton>}
       />
       <div style={{ padding: '0 20px 100px', display: 'flex', flexDirection: 'column', gap: 16 }}>
         <TextField

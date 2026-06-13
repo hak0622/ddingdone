@@ -1,7 +1,8 @@
-@docs/skills/apps-in-toss.md
-@docs/skills/tds-mobile.md
-
 # 프로젝트: 띵돈 (ddingdone)
+
+## 참고 문서 사용 규칙
+- `docs/skills/apps-in-toss.md`와 `docs/skills/tds-mobile.md`는 대용량 문서이므로 전체를 메모리에 로드하지 말 것.
+- 필요한 기능명/컴포넌트명만 `rg`로 검색해서 해당 부분만 참고할 것.
 
 ## 기술 스택
 - React 18 + Vite (CSR 전용 — SSR 금지, eval() 금지)

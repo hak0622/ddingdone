@@ -32,12 +32,12 @@ export default function Onboarding() {
           onChange={(e) => setNickname(e.target.value)}
         />
       </div>
-      <FixedBottomCTA.Single
+      <FixedBottomCTA
         disabled={nickname.trim().length === 0}
         onClick={handleStart}
       >
         시작하기
-      </FixedBottomCTA.Single>
+      </FixedBottomCTA>
     </>
   )
 }
