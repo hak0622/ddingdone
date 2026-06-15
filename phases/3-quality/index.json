@@ -16,12 +16,15 @@
       "status": "completed",
       "started_at": "2026-06-15T18:24:03+0900",
       "summary": "진행중 방 생성자에게 관리 버튼 노출, 삭제 기능 활성화",
-      "completed_at": "2026-06-15T18:25:30+0900"
+      "completed_at": "2026-06-15T18:25:45+0900"
     },
     {
       "step": 2,
       "name": "style-tokens",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-06-15T18:25:45+0900",
+      "summary": "src/styles/tokens.ts 생성, History/Settings 인라인 색상 → COLORS 토큰 교체",
+      "completed_at": "2026-06-15T18:26:55+0900"
     },
     {
       "step": 3,
