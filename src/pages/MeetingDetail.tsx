@@ -1,18 +1,14 @@
 import { useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Asset, ConfirmDialog, FixedBottomCTA, List, ListRow, Top } from '@toss/tds-mobile'
-import { doc, updateDoc, setDoc, deleteDoc, getDoc, writeBatch, getDocs, collection, increment, arrayUnion } from 'firebase/firestore'
+import { Asset, BottomSheet, ConfirmDialog, FixedBottomCTA, List, ListRow, Top, useBottomSheet } from '@toss/tds-mobile'
+import { doc, updateDoc, setDoc, writeBatch, getDocs, collection, increment, arrayUnion } from 'firebase/firestore'
+import { formatKRW } from '../utils/format'
 import { db } from '../lib/firebase'
 import { uploadImage } from '../lib/cloudinary'
 import { shareInviteLink } from '../lib/bridge'
 import { useMeeting } from '../hooks/useMeeting'
 import { useUserStore } from '../store/userStore'
 import ResultScreen from '../components/ResultScreen'
-
-function formatKRW(amount: number): string {
-  return `${amount.toLocaleString('ko-KR')}원`
-}
-
 
 const CATEGORY_EMOJI: Record<string, string> = {
   식비: '🍖',
@@ -46,8 +42,6 @@ export default function MeetingDetail() {
   const { uid, setUser } = useUserStore()
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState(false)
-  const [togglingStatus, setTogglingStatus] = useState(false)
-  const [confirmSettle, setConfirmSettle] = useState(false)
   const [pendingFile, setPendingFile] = useState<File | null>(null)
   const [pendingPreview, setPendingPreview] = useState<string | null>(null)
   const [joinNickname, setJoinNickname] = useState('')
@@ -55,7 +49,12 @@ export default function MeetingDetail() {
   const [joinedNickname, setJoinedNickname] = useState<string | null>(null)
   const [joinError, setJoinError] = useState('')
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
+  const [confirmDeleteMeeting, setConfirmDeleteMeeting] = useState(false)
+  const [deletingMeeting, setDeletingMeeting] = useState(false)
+  const [deletePreMemberTarget, setDeletePreMemberTarget] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const { open: openManageSheet, close: closeManageSheet } = useBottomSheet()
+  const isSettled = meeting?.status === 'settled'
 
   async function handleShare() {
     if (!id) return
@@ -127,23 +126,6 @@ export default function MeetingDetail() {
     setPendingPreview(null)
   }
 
-  async function handleToggleStatus() {
-    if (!id || !meeting) return
-    if (meeting.status === 'active' && !confirmSettle) {
-      setConfirmSettle(true)
-      return
-    }
-    setConfirmSettle(false)
-    setTogglingStatus(true)
-    try {
-      const nextStatus = meeting.status === 'active' ? 'settled' : 'active'
-      await updateDoc(doc(db, 'meetings', id), { status: nextStatus })
-    } catch (err) {
-      console.error('상태 변경 실패', err)
-    } finally {
-      setTogglingStatus(false)
-    }
-  }
 
   async function handleSavePhoto() {
     if (!pendingFile || !id) return
@@ -163,17 +145,117 @@ export default function MeetingDetail() {
     }
   }
 
+  async function handleReopenMeeting() {
+    if (!id) return
+    closeManageSheet()
+    await updateDoc(doc(db, 'meetings', id), { status: 'active' })
+  }
+
+  async function handleDeleteMeeting() {
+    if (!id || deletingMeeting) return
+    setDeletingMeeting(true)
+    try {
+      const batch = writeBatch(db)
+      Object.keys(members).forEach((memberUid) => {
+        batch.delete(doc(db, 'meetings', id, 'members', memberUid))
+      })
+      expenses.forEach((e) => {
+        batch.delete(doc(db, 'meetings', id, 'expenses', e.id))
+      })
+      batch.delete(doc(db, 'meetings', id))
+      await batch.commit()
+      navigate('/')
+    } finally {
+      setDeletingMeeting(false)
+    }
+  }
+
+  function openManage() {
+    openManageSheet({
+      header: <BottomSheet.Header>관리</BottomSheet.Header>,
+      onDimmerClick: closeManageSheet,
+      children: (
+        <div style={{ padding: '0 20px 8px' }}>
+          <button
+            onClick={() => { closeManageSheet(); navigate(`/meetings/${id}/edit`) }}
+            style={{
+              width: '100%',
+              padding: '16px 0',
+              background: 'none',
+              border: 'none',
+              borderBottom: '1px solid #f0f0f0',
+              textAlign: 'left',
+              fontSize: 16,
+              color: '#191919',
+              cursor: 'pointer',
+            }}
+          >
+            방 정보 수정
+          </button>
+          {isSettled && (
+            <button
+              onClick={handleReopenMeeting}
+              style={{
+                width: '100%',
+                padding: '16px 0',
+                background: 'none',
+                border: 'none',
+                borderBottom: '1px solid #f0f0f0',
+                textAlign: 'left',
+                fontSize: 16,
+                color: '#191919',
+                cursor: 'pointer',
+              }}
+            >
+              정산 다시 열기
+            </button>
+          )}
+          <button
+            onClick={() => { closeManageSheet(); setConfirmDeleteMeeting(true) }}
+            style={{
+              width: '100%',
+              padding: '16px 0',
+              background: 'none',
+              border: 'none',
+              textAlign: 'left',
+              fontSize: 16,
+              color: '#ef4444',
+              cursor: 'pointer',
+            }}
+          >
+            삭제
+          </button>
+        </div>
+      ),
+    })
+  }
+
+  async function handleDeletePreMember(preUid: string) {
+    if (!id) return
+    const preMemberExpenses = expenses.filter((e) => e.paidBy === preUid)
+    const totalToRemove = preMemberExpenses.reduce((sum, e) => sum + e.amount, 0)
+    const batch = writeBatch(db)
+    preMemberExpenses.forEach((e) => batch.delete(doc(db, 'meetings', id, 'expenses', e.id)))
+    batch.delete(doc(db, 'meetings', id, 'members', preUid))
+    batch.update(doc(db, 'meetings', id), {
+      memberCount: increment(-1),
+      totalAmount: increment(-totalToRemove),
+      expenseCount: increment(-preMemberExpenses.length),
+    })
+    await batch.commit()
+  }
+
   async function handleDeleteExpense(expenseId: string) {
     if (!id) return
-    const expSnap = await getDoc(doc(db, 'meetings', id, 'expenses', expenseId))
-    const amount = expSnap.data()?.amount ?? 0
-    await Promise.all([
-      deleteDoc(doc(db, 'meetings', id, 'expenses', expenseId)),
-      updateDoc(doc(db, 'meetings', id), {
-        totalAmount: increment(-amount),
-        expenseCount: increment(-1),
-      }),
-    ])
+    const expense = expenses.find((e) => e.id === expenseId)
+    if (!expense) return
+    const batch = writeBatch(db)
+    batch.delete(doc(db, 'meetings', id, 'expenses', expenseId))
+    batch.update(doc(db, 'meetings', id), {
+      totalAmount: increment(-expense.amount),
+      expenseCount: increment(-1),
+    })
+    await batch.commit()
   }
 
   if (loading) {
@@ -321,7 +403,6 @@ export default function MeetingDetail() {
   const memberEntries = Object.entries(members)
   const totalAmount = expenses.reduce((sum, e) => sum + e.amount, 0)
   const perPerson = memberEntries.length > 0 ? Math.floor(totalAmount / memberEntries.length) : 0
-  const isSettled = meeting.status === 'settled'
 
   const myPaid = expenses.filter((e) => e.paidBy === uid).reduce((s, e) => s + e.amount, 0)
   const myBalance = myPaid - perPerson
@@ -331,59 +412,43 @@ export default function MeetingDetail() {
       <Top
         title={<Top.TitleParagraph size={22}>{meeting.name}</Top.TitleParagraph>}
         right={
-          <Top.RightButton onClick={handleToggleStatus} disabled={togglingStatus}>
-            {isSettled ? '진행중으로' : '완료하기'}
-          </Top.RightButton>
-        }
-      />
-
-      {confirmSettle && (
-        <div
-          style={{
-            background: '#fff8e1',
-            borderBottom: '1px solid #ffe082',
-            padding: '12px 20px',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-          }}
-        >
-          <p style={{ fontSize: 14, fontWeight: 500, margin: 0, color: '#333' }}>
-            정산을 완료할까요?
-          </p>
-          <div style={{ display: 'flex', gap: 8 }}>
+          uid === meeting?.createdBy ? (
             <button
-              onClick={() => setConfirmSettle(false)}
+              onClick={openManage}
               style={{
-                padding: '6px 14px',
-                fontSize: 13,
+                marginRight: 16,
+                padding: '5px 12px',
+                borderRadius: 20,
                 border: '1px solid #d8d8d8',
-                borderRadius: 6,
                 background: '#fff',
-                cursor: 'pointer',
-              }}
-            >
-              취소
-            </button>
-            <button
-              onClick={handleToggleStatus}
-              disabled={togglingStatus}
-              style={{
-                padding: '6px 14px',
+                color: '#555',
                 fontSize: 13,
                 fontWeight: 600,
-                border: 'none',
-                borderRadius: 6,
-                background: '#3182F6',
-                color: '#fff',
                 cursor: 'pointer',
               }}
             >
-              완료
+              관리
             </button>
-          </div>
-        </div>
-      )}
+          ) : !isSettled ? (
+            <button
+              onClick={() => navigate(`/meetings/${id}/edit`)}
+              style={{
+                marginRight: 16,
+                padding: '5px 12px',
+                borderRadius: 20,
+                border: '1px solid #d8d8d8',
+                background: '#fff',
+                color: '#555',
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              수정
+            </button>
+          ) : undefined
+        }
+      />
 
       <input
         ref={fileInputRef}
@@ -395,7 +460,7 @@ export default function MeetingDetail() {
 
       {/* 시네마틱 히어로 */}
       {pendingPreview ? (
-        <div style={{ position: 'relative', height: 240 }}>
+        <div style={{ position: 'relative', width: '100%', aspectRatio: '1 / 1' }}>
           <img
             src={pendingPreview}
             alt="미리보기"
@@ -427,7 +492,7 @@ export default function MeetingDetail() {
           </div>
         </div>
       ) : meeting.photoUrl ? (
-        <div style={{ position: 'relative', height: 240 }}>
+        <div style={{ position: 'relative', width: '100%', aspectRatio: '1 / 1' }}>
           <img
             src={meeting.photoUrl}
             alt="대표 사진"
@@ -459,28 +524,28 @@ export default function MeetingDetail() {
       ) : (
         <div
           onClick={!isSettled ? () => fileInputRef.current?.click() : undefined}
-          style={{ position: 'relative', height: 240, background: 'linear-gradient(160deg, #3182F6 0%, #1a5fcc 100%)', cursor: isSettled ? 'default' : 'pointer' }}
+          style={{ position: 'relative', width: '100%', aspectRatio: '1 / 1', background: '#f5f5f5', cursor: isSettled ? 'default' : 'pointer' }}
         >
           <div
             style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, paddingBottom: 64 }}
           >
-            <CameraIcon color="rgba(255,255,255,0.5)" />
+            <CameraIcon color="#c8c8c8" />
             {!isSettled && (
-              <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)', margin: 0 }}>
+              <p style={{ fontSize: 13, color: '#aaa', margin: 0 }}>
                 사진을 추가해보세요
               </p>
             )}
           </div>
           <span
-            style={{ position: 'absolute', top: 12, right: 14, fontSize: 11, fontWeight: 700, padding: '3px 9px', borderRadius: 20, background: 'rgba(255,255,255,0.2)', color: '#fff' }}
+            style={{ position: 'absolute', top: 12, right: 14, fontSize: 11, fontWeight: 700, padding: '3px 9px', borderRadius: 20, background: isSettled ? '#e0e0e0' : '#3182F6', color: isSettled ? '#666' : '#fff' }}
           >
             {isSettled ? '완료' : '진행중'}
           </span>
           <div style={{ position: 'absolute', bottom: 16, left: 20, right: 20 }}>
-            <p style={{ fontSize: 20, fontWeight: 700, color: '#fff', margin: '0 0 3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <p style={{ fontSize: 20, fontWeight: 700, color: '#191919', margin: '0 0 3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {meeting.name}
             </p>
-            <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.75)', margin: 0 }}>
+            <p style={{ fontSize: 13, color: '#888', margin: 0 }}>
               {meeting.date}{meeting.memo ? ` · ${meeting.memo}` : ''}
             </p>
           </div>
@@ -505,21 +570,51 @@ export default function MeetingDetail() {
           }}
         >
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', flex: 1 }}>
-            {memberEntries.map(([memberUid, name]) => (
-              <span
-                key={memberUid}
-                style={{
-                  padding: '4px 10px',
-                  fontSize: 13,
-                  border: '1px solid #e8e8e8',
-                  borderRadius: 20,
-                  background: '#f5f5f5',
-                  color: '#333',
-                }}
-              >
-                {memberUid === uid ? '나' : name}
-              </span>
-            ))}
+            {memberEntries.map(([memberUid, name]) => {
+              const canDeleteMember = !isSettled && uid === meeting.createdBy && memberUid.startsWith('pre_')
+              return (
+                <span
+                  key={memberUid}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    padding: canDeleteMember ? '4px 6px 4px 10px' : '4px 10px',
+                    fontSize: 13,
+                    border: '1px solid #e8e8e8',
+                    borderRadius: 20,
+                    background: '#f5f5f5',
+                    color: '#333',
+                  }}
+                >
+                  {memberUid === uid ? '나' : name}
+                  {canDeleteMember && (
+                    <button
+                      onClick={() => setDeletePreMemberTarget(memberUid)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        width: 16,
+                        height: 16,
+                        borderRadius: '50%',
+                        border: 'none',
+                        background: '#ccc',
+                        color: '#fff',
+                        fontSize: 10,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        lineHeight: 1,
+                        padding: 0,
+                        flexShrink: 0,
+                      }}
+                    >
+                      ✕
+                    </button>
+                  )}
+                </span>
+              )
+            })}
           </div>
           {!isSettled && (
             <button
@@ -743,6 +838,51 @@ export default function MeetingDetail() {
           </ConfirmDialog.CancelButton>
         }
       />
+
+      <ConfirmDialog
+        open={deletePreMemberTarget !== null}
+        title="멤버를 삭제할까요?"
+        description="이 멤버가 결제한 비용도 함께 삭제돼요."
+        onClose={() => setDeletePreMemberTarget(null)}
+        confirmButton={
+          <ConfirmDialog.ConfirmButton
+            onClick={() => {
+              if (deletePreMemberTarget) handleDeletePreMember(deletePreMemberTarget)
+              setDeletePreMemberTarget(null)
+            }}
+          >
+            삭제
+          </ConfirmDialog.ConfirmButton>
+        }
+        cancelButton={
+          <ConfirmDialog.CancelButton onClick={() => setDeletePreMemberTarget(null)}>
+            취소
+          </ConfirmDialog.CancelButton>
+        }
+      />
+
+      <ConfirmDialog
+        open={confirmDeleteMeeting}
+        title="정산방을 삭제할까요?"
+        description="삭제한 정산방과 모든 비용 기록은 복구할 수 없어요."
+        onClose={() => setConfirmDeleteMeeting(false)}
+        confirmButton={
+          <ConfirmDialog.ConfirmButton
+            onClick={() => {
+              setConfirmDeleteMeeting(false)
+              handleDeleteMeeting()
+            }}
+          >
+            삭제
+          </ConfirmDialog.ConfirmButton>
+        }
+        cancelButton={
+          <ConfirmDialog.CancelButton onClick={() => setConfirmDeleteMeeting(false)}>
+            취소
+          </ConfirmDialog.CancelButton>
+        }
+      />
+
     </>
   )
 }

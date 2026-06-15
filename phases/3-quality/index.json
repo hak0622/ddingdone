@@ -7,12 +7,16 @@
       "name": "vitest-setup",
       "status": "completed",
       "started_at": "2026-06-15T18:21:58+0900",
-      "summary": "vitest 설정 완료, format.test.ts 3개 + settle.test.ts 5개 통과"
+      "summary": "vitest 설정 완료, format.test.ts 3개 + settle.test.ts 5개 통과",
+      "completed_at": "2026-06-15T18:24:03+0900"
     },
     {
       "step": 1,
       "name": "delete-active-meeting",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-06-15T18:24:03+0900",
+      "summary": "진행중 방 생성자에게 관리 버튼 노출, 삭제 기능 활성화",
+      "completed_at": "2026-06-15T18:25:30+0900"
     },
     {
       "step": 2,
