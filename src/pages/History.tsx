@@ -4,17 +4,12 @@ import { Top } from '@toss/tds-mobile'
 import { useUserStore } from '../store/userStore'
 import { useMeetings } from '../hooks/useMeetings'
 import MeetingCard from '../components/MeetingCard'
+import { COLORS } from '../styles/tokens'
 
 type FilterStatus = 'all' | 'active' | 'settled'
 
 function parseDate(d: string) {
   return Number(d.replace(/\./g, ''))
-}
-
-const FILTER_LABELS: Record<FilterStatus, string> = {
-  all: '전체',
-  active: '진행중',
-  settled: '완료',
 }
 
 export default function History() {
@@ -23,6 +18,9 @@ export default function History() {
   const { meetings, loading } = useMeetings(uid)
   const [filter, setFilter] = useState<FilterStatus>('all')
   const [sortNewest, setSortNewest] = useState(true)
+
+  const activeCount = meetings.filter((m) => m.status === 'active').length
+  const settledCount = meetings.filter((m) => m.status === 'settled').length
 
   const filtered = meetings
     .filter((m) => filter === 'all' || m.status === filter)
@@ -34,7 +32,7 @@ export default function History() {
 
   return (
     <>
-      <Top title={<Top.TitleParagraph size={22}>내역({meetings.length})</Top.TitleParagraph>} />
+      <Top title={<Top.TitleParagraph size={22}>내역</Top.TitleParagraph>} />
 
       {loading ? (
         <div
@@ -45,7 +43,7 @@ export default function History() {
             height: 'calc(100vh - 56px - 60px)',
           }}
         >
-          <p style={{ fontSize: 14, color: '#8b8b8b', margin: 0 }}>불러오는 중...</p>
+          <p style={{ fontSize: 14, color: COLORS.textSecondary, margin: 0 }}>불러오는 중...</p>
         </div>
       ) : meetings.length === 0 ? (
         <div
@@ -59,7 +57,7 @@ export default function History() {
           }}
         >
           <p style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>아직 정산방이 없어요</p>
-          <p style={{ fontSize: 14, color: '#8b8b8b', margin: 0 }}>
+          <p style={{ fontSize: 14, color: COLORS.textSecondary, margin: 0 }}>
             홈 탭에서 첫 정산방을 만들어보세요
           </p>
         </div>
@@ -75,7 +73,11 @@ export default function History() {
             }}
           >
             <div style={{ display: 'flex', gap: 6 }}>
-              {(['all', 'active', 'settled'] as FilterStatus[]).map((f) => (
+              {([
+                ['all', `전체(${meetings.length})`],
+                ['active', `진행중(${activeCount})`],
+                ['settled', `완료(${settledCount})`],
+              ] as [FilterStatus, string][]).map(([f, label]) => (
                 <button
                   key={f}
                   onClick={() => setFilter(f)}
@@ -86,11 +88,11 @@ export default function History() {
                     cursor: 'pointer',
                     fontSize: 13,
                     fontWeight: 600,
-                    background: filter === f ? '#3182F6' : '#f5f5f5',
-                    color: filter === f ? '#fff' : '#888',
+                    background: filter === f ? COLORS.primary : COLORS.backgroundGray,
+                    color: filter === f ? COLORS.background : COLORS.textSecondary,
                   }}
                 >
-                  {FILTER_LABELS[f]}
+                  {label}
                 </button>
               ))}
             </div>
@@ -102,7 +104,7 @@ export default function History() {
                 cursor: 'pointer',
                 fontSize: 12,
                 fontWeight: 600,
-                color: '#888',
+                color: COLORS.textSecondary,
                 display: 'flex',
                 alignItems: 'center',
                 gap: 2,
@@ -116,7 +118,7 @@ export default function History() {
 
           {/* 리스트 */}
           {filtered.length === 0 ? (
-            <p style={{ fontSize: 14, color: '#bbb', textAlign: 'center', padding: '40px 0', margin: 0 }}>
+            <p style={{ fontSize: 14, color: COLORS.textMuted, textAlign: 'center', padding: '40px 0', margin: 0 }}>
               해당하는 정산방이 없어요
             </p>
           ) : (

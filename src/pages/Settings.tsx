@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { TextField, Top } from '@toss/tds-mobile'
-import { collection, doc, getDocs, getDoc, updateDoc } from 'firebase/firestore'
+import { COLORS } from '../styles/tokens'
+import { collection, doc, getDocs, query, where, writeBatch } from 'firebase/firestore'
 import { db } from '../lib/firebase'
 import { useUserStore } from '../store/userStore'
 
@@ -20,16 +21,13 @@ export default function Settings() {
       localStorage.setItem(NICKNAME_KEY, trimmed)
       setUser(uid, trimmed)
 
-      const meetingsSnap = await getDocs(collection(db, 'meetings'))
-      await Promise.all(
-        meetingsSnap.docs.map(async (meetingDoc) => {
-          const memberRef = doc(db, 'meetings', meetingDoc.id, 'members', uid)
-          const memberSnap = await getDoc(memberRef)
-          if (memberSnap.exists()) {
-            await updateDoc(memberRef, { nickname: trimmed })
-          }
-        })
-      )
+      const q = query(collection(db, 'meetings'), where('memberUids', 'array-contains', uid))
+      const meetingsSnap = await getDocs(q)
+      const batch = writeBatch(db)
+      meetingsSnap.docs.forEach((meetingDoc) => {
+        batch.update(doc(db, 'meetings', meetingDoc.id, 'members', uid), { nickname: trimmed })
+      })
+      await batch.commit()
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (err) {
@@ -65,8 +63,8 @@ export default function Settings() {
             fontWeight: 700,
             border: 'none',
             borderRadius: 12,
-            background: saved ? '#22c55e' : canSave ? '#3182F6' : '#e8e8e8',
-            color: canSave ? '#fff' : '#999',
+            background: saved ? COLORS.success : canSave ? COLORS.primary : COLORS.disabled,
+            color: canSave ? COLORS.background : COLORS.disabledText,
             cursor: canSave ? 'pointer' : 'default',
             transition: 'background 0.2s',
           }}
