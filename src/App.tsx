@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom'
+import ErrorBoundary from './components/ErrorBoundary'
 
 import { signInAnonymously } from './lib/firebase'
 import { getAnonymousUid } from './lib/bridge'
@@ -13,6 +14,7 @@ import MeetingNew from './pages/MeetingNew'
 import MeetingDetail from './pages/MeetingDetail'
 import ExpenseInput from './pages/ExpenseInput'
 import Settle from './pages/Settle'
+import MeetingEdit from './pages/MeetingEdit'
 
 const NICKNAME_KEY = 'ddingdone_nickname'
 const UID_KEY = 'ddingdone_uid'
@@ -75,20 +77,23 @@ function AppInit() {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route element={<AppInit />}>
-          <Route path="/onboarding" element={<Onboarding />} />
-          <Route path="/" element={<Home />} />
-          <Route path="/history" element={<History />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/meetings/new" element={<MeetingNew />} />
-          <Route path="/meetings/:id" element={<MeetingDetail />} />
-          <Route path="/meetings/:id/expense" element={<ExpenseInput />} />
-          <Route path="/meetings/:id/settle" element={<Settle />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <Routes>
+          <Route element={<AppInit />}>
+            <Route path="/onboarding" element={<Onboarding />} />
+            <Route path="/" element={<Home />} />
+            <Route path="/history" element={<History />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/meetings/new" element={<MeetingNew />} />
+            <Route path="/meetings/:id" element={<MeetingDetail />} />
+            <Route path="/meetings/:id/edit" element={<MeetingEdit />} />
+            <Route path="/meetings/:id/expense" element={<ExpenseInput />} />
+            <Route path="/meetings/:id/settle" element={<Settle />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </ErrorBoundary>
   )
 }

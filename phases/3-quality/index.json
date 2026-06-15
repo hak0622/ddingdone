@@ -24,12 +24,15 @@
       "status": "completed",
       "started_at": "2026-06-15T18:25:45+0900",
       "summary": "src/styles/tokens.ts 생성, History/Settings 인라인 색상 → COLORS 토큰 교체",
-      "completed_at": "2026-06-15T18:26:55+0900"
+      "completed_at": "2026-06-15T18:28:05+0900"
     },
     {
       "step": 3,
       "name": "error-boundary",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-06-15T18:28:05+0900",
+      "summary": "ErrorBoundary 컴포넌트 생성, App.tsx 루트에 적용",
+      "completed_at": "2026-06-15T18:29:00+0900"
     }
   ],
   "created_at": "2026-06-15T18:21:58+0900"
