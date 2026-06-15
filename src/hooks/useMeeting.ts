@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { doc, collection, onSnapshot } from 'firebase/firestore'
+import { doc, collection, onSnapshot, query, orderBy } from 'firebase/firestore'
 import { db } from '../lib/firebase'
 
 export interface Meeting {
@@ -9,6 +9,7 @@ export interface Meeting {
   memo: string
   createdBy: string
   photoUrl: string | null
+  status: 'active' | 'settled'
 }
 
 export interface MemberMap {
@@ -20,6 +21,7 @@ export interface Expense {
   amount: number
   paidBy: string
   memo: string
+  category: string
 }
 
 export function useMeeting(meetingId: string | undefined) {
@@ -30,7 +32,7 @@ export function useMeeting(meetingId: string | undefined) {
 
   useEffect(() => {
     if (!meetingId) {
-      setLoading(true)
+      setLoading(false)
       return
     }
 
@@ -46,6 +48,7 @@ export function useMeeting(meetingId: string | undefined) {
           memo: data.memo,
           createdBy: data.createdBy,
           photoUrl: data.photoUrl ?? null,
+          status: data.status ?? 'active',
         })
       } else {
         setMeeting(null)
@@ -61,7 +64,11 @@ export function useMeeting(meetingId: string | undefined) {
       setMembers(map)
     })
 
-    const expensesUnsub = onSnapshot(collection(db, 'meetings', meetingId, 'expenses'), (snap) => {
+    const expensesQuery = query(
+      collection(db, 'meetings', meetingId, 'expenses'),
+      orderBy('createdAt', 'asc'),
+    )
+    const expensesUnsub = onSnapshot(expensesQuery, (snap) => {
       const list: Expense[] = []
       snap.forEach((d) => {
         const data = d.data()
@@ -69,7 +76,8 @@ export function useMeeting(meetingId: string | undefined) {
           id: d.id,
           amount: data.amount,
           paidBy: data.paidBy,
-          memo: data.memo,
+          memo: data.memo ?? '',
+          category: data.category ?? '',
         })
       })
       setExpenses(list)

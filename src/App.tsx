@@ -4,8 +4,11 @@ import { BrowserRouter, Navigate, Outlet, Route, Routes, useNavigate, useSearchP
 import { signInAnonymously } from './lib/firebase'
 import { getAnonymousUid } from './lib/bridge'
 import { useUserStore } from './store/userStore'
+import BottomTabBar from './components/BottomTabBar'
 import Onboarding from './pages/Onboarding'
 import Home from './pages/Home'
+import History from './pages/History'
+import Settings from './pages/Settings'
 import MeetingNew from './pages/MeetingNew'
 import MeetingDetail from './pages/MeetingDetail'
 import ExpenseInput from './pages/ExpenseInput'
@@ -62,7 +65,12 @@ function AppInit() {
     )
   }
 
-  return <Outlet />
+  return (
+    <>
+      <Outlet />
+      <BottomTabBar />
+    </>
+  )
 }
 
 export default function App() {
@@ -72,6 +80,8 @@ export default function App() {
         <Route element={<AppInit />}>
           <Route path="/onboarding" element={<Onboarding />} />
           <Route path="/" element={<Home />} />
+          <Route path="/history" element={<History />} />
+          <Route path="/settings" element={<Settings />} />
           <Route path="/meetings/new" element={<MeetingNew />} />
           <Route path="/meetings/:id" element={<MeetingDetail />} />
           <Route path="/meetings/:id/expense" element={<ExpenseInput />} />
