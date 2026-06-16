@@ -1,7 +1,7 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Asset, BottomSheet, ConfirmDialog, FixedBottomCTA, List, ListRow, Top, useBottomSheet } from '@toss/tds-mobile'
-import { doc, updateDoc, setDoc, writeBatch, getDocs, collection, increment, arrayUnion } from 'firebase/firestore'
+import { doc, updateDoc, writeBatch, increment, arrayUnion } from 'firebase/firestore'
 import { formatKRW } from '../utils/format'
 import { db } from '../lib/firebase'
 import { uploadImage } from '../lib/cloudinary'
@@ -56,6 +56,10 @@ export default function MeetingDetail() {
   const { open: openManageSheet, close: closeManageSheet } = useBottomSheet()
   const isSettled = meeting?.status === 'settled'
 
+  useEffect(() => {
+    return () => { if (pendingPreview) URL.revokeObjectURL(pendingPreview) }
+  }, [pendingPreview])
+
   async function handleShare() {
     if (!id) return
     try {
@@ -71,12 +75,9 @@ export default function MeetingDetail() {
     setJoinError('')
     try {
       const batch = writeBatch(db)
-      const expensesSnap = await getDocs(collection(db, 'meetings', id, 'expenses'))
-      expensesSnap.forEach((expDoc) => {
-        if (expDoc.data().paidBy === preUid) {
-          batch.update(expDoc.ref, { paidBy: uid })
-        }
-      })
+      expenses
+        .filter((e) => e.paidBy === preUid)
+        .forEach((e) => batch.update(doc(db, 'meetings', id, 'expenses', e.id), { paidBy: uid }))
       batch.set(doc(db, 'meetings', id, 'members', uid), { nickname })
       batch.delete(doc(db, 'meetings', id, 'members', preUid))
       batch.update(doc(db, 'meetings', id), { memberUids: arrayUnion(uid) })
@@ -97,11 +98,13 @@ export default function MeetingDetail() {
     setJoinError('')
     try {
       const nickname = joinNickname.trim()
-      await setDoc(doc(db, 'meetings', id, 'members', uid), { nickname })
-      await updateDoc(doc(db, 'meetings', id), {
+      const batch = writeBatch(db)
+      batch.set(doc(db, 'meetings', id, 'members', uid), { nickname })
+      batch.update(doc(db, 'meetings', id), {
         memberUids: arrayUnion(uid),
         memberCount: increment(1),
       })
+      await batch.commit()
       localStorage.setItem('ddingdone_nickname', nickname)
       setUser(uid, nickname)
       setJoinedNickname(nickname)

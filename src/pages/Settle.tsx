@@ -3,30 +3,12 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { FixedBottomCTA, Top } from '@toss/tds-mobile'
 import { doc, updateDoc } from 'firebase/firestore'
 import { db } from '../lib/firebase'
+import { formatKRW } from '../utils/format'
 import { useMeeting } from '../hooks/useMeeting'
 import { calculateSettlements, type Settlement } from '../utils/settle'
 import { useUserStore } from '../store/userStore'
 import { shareText } from '../lib/bridge'
 import ResultScreen from '../components/ResultScreen'
-
-function formatKRW(amount: number): string {
-  return `${amount.toLocaleString('ko-KR')}원`
-}
-
-function CameraIcon() {
-  return (
-    <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
-      <path
-        d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"
-        stroke="#ccc"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <circle cx="12" cy="13" r="3.5" stroke="#ccc" strokeWidth="1.5" />
-    </svg>
-  )
-}
 
 export default function Settle() {
   const { id: meetingId } = useParams<{ id: string }>()
@@ -46,7 +28,7 @@ export default function Settle() {
 
   const totalAmount = expenses.reduce((sum, e) => sum + e.amount, 0)
   const memberCount = Object.keys(members).length
-  const perPerson = memberCount > 0 ? Math.round(totalAmount / memberCount) : 0
+  const perPerson = memberCount > 0 ? Math.floor(totalAmount / memberCount) : 0
 
   const myPayments = settlements.filter((s) => s.from === uid)
   const myReceivables = settlements.filter((s) => s.to === uid)
@@ -145,40 +127,10 @@ export default function Settle() {
 
   return (
     <>
-      <Top title={<Top.TitleParagraph size={22}>정산 결과</Top.TitleParagraph>} />
+      <Top title={<Top.TitleParagraph size={22}>{meeting.name}</Top.TitleParagraph>} />
 
       <div style={{ paddingBottom: 100 }}>
-        {/* 대표 사진 영역 */}
-        {meeting.photoUrl ? (
-          <img
-            src={meeting.photoUrl}
-            alt="대표 사진"
-            style={{ width: '100%', height: 160, objectFit: 'cover', display: 'block' }}
-          />
-        ) : (
-          <div
-            style={{
-              height: 160,
-              background: '#f5f5f5',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <CameraIcon />
-          </div>
-        )}
-
         <div style={{ padding: '20px 20px 0' }}>
-          {/* 방 이름 + 날짜/메모 */}
-          <p style={{ fontSize: 18, fontWeight: 700, margin: '0 0 6px', color: '#191919' }}>
-            {meeting.name}
-          </p>
-          <p style={{ fontSize: 14, color: '#888', margin: '0 0 20px' }}>
-            {meeting.date}
-            {meeting.memo ? ` · ${meeting.memo}` : ''}
-          </p>
-
           {/* 요약 */}
           <div
             style={{
@@ -275,31 +227,61 @@ export default function Settle() {
             </p>
           )}
 
-          {/* 정산 완료로 표시 */}
-          {!isSettled && (
-            <button
-              onClick={handleSettle}
-              disabled={settling}
-              style={{
-                width: '100%',
-                padding: '14px 0',
-                fontSize: 15,
-                fontWeight: 600,
-                border: '1.5px solid #3182F6',
-                borderRadius: 10,
-                background: '#fff',
-                color: settling ? '#aaa' : '#3182F6',
-                cursor: settling ? 'default' : 'pointer',
-                marginTop: 8,
-              }}
-            >
-              {settling ? '처리 중...' : '정산 완료로 표시'}
-            </button>
-          )}
         </div>
       </div>
 
-      <FixedBottomCTA onClick={handleShare}>정산 결과 공유하기</FixedBottomCTA>
+      {isSettled ? (
+        <FixedBottomCTA onClick={handleShare}>정산 결과 공유하기</FixedBottomCTA>
+      ) : (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            display: 'flex',
+            gap: 8,
+            padding: '12px 20px',
+            paddingBottom: 'calc(12px + env(safe-area-inset-bottom))',
+            background: '#fff',
+            borderTop: '1px solid #f0f0f0',
+          }}
+        >
+          <button
+            onClick={handleShare}
+            style={{
+              flex: 1,
+              padding: '14px 0',
+              borderRadius: 12,
+              border: '1.5px solid #3182F6',
+              background: '#fff',
+              color: '#3182F6',
+              fontSize: 15,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            결과 공유하기
+          </button>
+          <button
+            onClick={handleSettle}
+            disabled={settling}
+            style={{
+              flex: 1,
+              padding: '14px 0',
+              borderRadius: 12,
+              border: 'none',
+              background: settling ? '#aaa' : '#3182F6',
+              color: '#fff',
+              fontSize: 15,
+              fontWeight: 600,
+              cursor: settling ? 'default' : 'pointer',
+            }}
+          >
+            {settling ? '처리 중...' : '정산 완료'}
+          </button>
+        </div>
+      )}
     </>
   )
 }

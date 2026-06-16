@@ -28,15 +28,20 @@ export function useMeeting(meetingId: string | undefined) {
   const [meeting, setMeeting] = useState<Meeting | null>(null)
   const [members, setMembers] = useState<MemberMap>({})
   const [expenses, setExpenses] = useState<Expense[]>([])
-  const [loading, setLoading] = useState(true)
+  const [meetingReady, setMeetingReady] = useState(false)
+  const [membersReady, setMembersReady] = useState(false)
+
+  const loading = !meetingReady || !membersReady
 
   useEffect(() => {
     if (!meetingId) {
-      setLoading(false)
+      setMeetingReady(true)
+      setMembersReady(true)
       return
     }
 
-    setLoading(true)
+    setMeetingReady(false)
+    setMembersReady(false)
 
     const meetingUnsub = onSnapshot(doc(db, 'meetings', meetingId), (snap) => {
       if (snap.exists()) {
@@ -53,7 +58,7 @@ export function useMeeting(meetingId: string | undefined) {
       } else {
         setMeeting(null)
       }
-      setLoading(false)
+      setMeetingReady(true)
     })
 
     const membersUnsub = onSnapshot(collection(db, 'meetings', meetingId, 'members'), (snap) => {
@@ -62,6 +67,7 @@ export function useMeeting(meetingId: string | undefined) {
         map[d.id] = d.data().nickname
       })
       setMembers(map)
+      setMembersReady(true)
     })
 
     const expensesQuery = query(
@@ -91,4 +97,23 @@ export function useMeeting(meetingId: string | undefined) {
   }, [meetingId])
 
   return { meeting, members, expenses, loading }
+}
+
+export function useMeetingMembers(meetingId: string | undefined) {
+  const [members, setMembers] = useState<MemberMap>({})
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (!meetingId) { setLoading(false); return }
+    setLoading(true)
+    const unsub = onSnapshot(collection(db, 'meetings', meetingId, 'members'), (snap) => {
+      const map: MemberMap = {}
+      snap.forEach((d) => { map[d.id] = d.data().nickname })
+      setMembers(map)
+      setLoading(false)
+    })
+    return () => unsub()
+  }, [meetingId])
+
+  return { members, loading }
 }

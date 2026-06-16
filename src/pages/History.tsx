@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Top } from '@toss/tds-mobile'
 import { useUserStore } from '../store/userStore'
@@ -22,13 +22,16 @@ export default function History() {
   const activeCount = meetings.filter((m) => m.status === 'active').length
   const settledCount = meetings.filter((m) => m.status === 'settled').length
 
-  const filtered = meetings
-    .filter((m) => filter === 'all' || m.status === filter)
-    .sort((a, b) =>
-      sortNewest
-        ? parseDate(b.date) - parseDate(a.date)
-        : parseDate(a.date) - parseDate(b.date)
-    )
+  const filtered = useMemo(() =>
+    meetings
+      .filter((m) => filter === 'all' || m.status === filter)
+      .sort((a, b) =>
+        sortNewest
+          ? parseDate(b.date) - parseDate(a.date)
+          : parseDate(a.date) - parseDate(b.date)
+      ),
+    [meetings, filter, sortNewest]
+  )
 
   return (
     <>

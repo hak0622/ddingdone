@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { FixedBottomCTA, TextField, Top } from '@toss/tds-mobile'
-import { collection, addDoc, setDoc, doc, serverTimestamp } from 'firebase/firestore'
+import { collection, doc, serverTimestamp, writeBatch } from 'firebase/firestore'
 import { db } from '../lib/firebase'
 import { useUserStore } from '../store/userStore'
 import ResultScreen from '../components/ResultScreen'
@@ -24,7 +24,10 @@ async function createMeeting(
     .map((n) => n.trim())
     .filter((n) => n.length > 0 && (nickname.length === 0 || n !== nickname))
 
-  const meetingRef = await addDoc(collection(db, 'meetings'), {
+  const meetingRef = doc(collection(db, 'meetings'))
+  const batch = writeBatch(db)
+
+  batch.set(meetingRef, {
     name: fields.name.trim(),
     date: fields.date,
     memo: fields.memo,
@@ -38,17 +41,14 @@ async function createMeeting(
     expenseCount: 0,
   })
 
-  await setDoc(doc(db, 'meetings', meetingRef.id, 'members', uid), {
-    nickname,
-  })
+  batch.set(doc(db, 'meetings', meetingRef.id, 'members', uid), { nickname })
 
   for (const name of names) {
     const preId = `pre_${Math.random().toString(36).slice(2, 9)}`
-    await setDoc(doc(db, 'meetings', meetingRef.id, 'members', preId), {
-      nickname: name,
-    })
+    batch.set(doc(db, 'meetings', meetingRef.id, 'members', preId), { nickname: name })
   }
 
+  await batch.commit()
   return meetingRef.id
 }
 

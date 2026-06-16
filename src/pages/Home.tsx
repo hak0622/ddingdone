@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Top } from '@toss/tds-mobile'
 import { useUserStore } from '../store/userStore'
@@ -8,7 +8,7 @@ import type { MeetingListItem } from '../hooks/useMeetings'
 const WEEK_DAYS = ['월', '화', '수', '목', '금', '토', '일']
 
 function normalizeDate(dateStr: string): string {
-  const parts = dateStr.trim().split(/[.\-\/]/)
+  const parts = dateStr.trim().split(/[.\-/]/)
   if (parts.length !== 3) return dateStr
   const [y, m, d] = parts
   return `${y}.${m.padStart(2, '0')}.${d.padStart(2, '0')}`
@@ -24,14 +24,28 @@ export default function Home() {
   const [month, setMonth] = useState(today.getMonth())
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
 
-  const meetingsByDate: Record<string, MeetingListItem[]> = {}
-  meetings.forEach((m) => {
-    const key = normalizeDate(m.date)
-    meetingsByDate[key] = [...(meetingsByDate[key] ?? []), m]
-  })
+  const meetingsByDate = useMemo(() => {
+    const map: Record<string, MeetingListItem[]> = {}
+    meetings.forEach((m) => {
+      const key = normalizeDate(m.date)
+      map[key] = [...(map[key] ?? []), m]
+    })
+    return map
+  }, [meetings])
 
-  const firstDayOfWeek = (new Date(year, month, 1).getDay() + 6) % 7
-  const daysInMonth = new Date(year, month + 1, 0).getDate()
+  const cells = useMemo(() => {
+    const firstDayOfWeek = (new Date(year, month, 1).getDay() + 6) % 7
+    const daysInMonth = new Date(year, month + 1, 0).getDate()
+    const arr: Array<{ day: number | null; dateStr: string | null }> = []
+    for (let i = 0; i < firstDayOfWeek; i++) arr.push({ day: null, dateStr: null })
+    for (let d = 1; d <= daysInMonth; d++) {
+      const mm = String(month + 1).padStart(2, '0')
+      const dd = String(d).padStart(2, '0')
+      arr.push({ day: d, dateStr: `${year}.${mm}.${dd}` })
+    }
+    return arr
+  }, [year, month])
+
   const todayStr = `${today.getFullYear()}.${String(today.getMonth() + 1).padStart(2, '0')}.${String(today.getDate()).padStart(2, '0')}`
 
   function prevMonth() {
@@ -48,16 +62,6 @@ export default function Home() {
 
   function handleDayClick(dateStr: string) {
     setSelectedDate((prev) => (prev === dateStr ? null : dateStr))
-  }
-
-  const cells: Array<{ day: number | null; dateStr: string | null }> = []
-  for (let i = 0; i < firstDayOfWeek; i++) {
-    cells.push({ day: null, dateStr: null })
-  }
-  for (let d = 1; d <= daysInMonth; d++) {
-    const mm = String(month + 1).padStart(2, '0')
-    const dd = String(d).padStart(2, '0')
-    cells.push({ day: d, dateStr: `${year}.${mm}.${dd}` })
   }
 
   const selectedMeetings = selectedDate ? (meetingsByDate[selectedDate] ?? []) : []
@@ -205,6 +209,7 @@ export default function Home() {
                         <img
                           src={dayMeetings[0].photoUrl}
                           alt=""
+                          loading="lazy"
                           style={{
                             position: 'absolute',
                             inset: 0,

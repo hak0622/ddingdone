@@ -23,7 +23,9 @@ export function calculateSettlements(
   const total = expenses.reduce((sum, e) => sum + e.amount, 0)
   if (total === 0) return []
 
-  const share = total / memberIds.length
+  // 1원 단위 정수 분배: baseShare * n + remainder = total 보장
+  const baseShare = Math.floor(total / memberIds.length)
+  const remainder = total - baseShare * memberIds.length
 
   const balances: Record<string, number> = {}
   for (const uid of memberIds) {
@@ -34,9 +36,10 @@ export function calculateSettlements(
       balances[expense.paidBy] += expense.amount
     }
   }
-  for (const uid of memberIds) {
-    balances[uid] = Math.round(balances[uid] - share)
-  }
+  // 첫 remainder명은 1원 더 부담 → 합계가 정확히 0이 됨
+  memberIds.forEach((uid, i) => {
+    balances[uid] -= i < remainder ? baseShare + 1 : baseShare
+  })
 
   const creditors: Array<{ uid: string; amount: number }> = []
   const debtors: Array<{ uid: string; amount: number }> = []

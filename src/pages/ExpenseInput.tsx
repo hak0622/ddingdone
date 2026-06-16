@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { FixedBottomCTA, Top } from '@toss/tds-mobile'
 import { collection, addDoc, updateDoc, getDoc, doc, serverTimestamp, increment } from 'firebase/firestore'
 import { db } from '../lib/firebase'
-import { useMeeting } from '../hooks/useMeeting'
+import { useMeetingMembers } from '../hooks/useMeeting'
 import { useUserStore } from '../store/userStore'
 
 const CATEGORIES = [
@@ -20,7 +20,7 @@ export default function ExpenseInput() {
   const [searchParams] = useSearchParams()
   const editId = searchParams.get('editId')
   const { uid } = useUserStore()
-  const { members, loading } = useMeeting(meetingId)
+  const { members, loading } = useMeetingMembers(meetingId)
 
   const [amount, setAmount] = useState('')
   const [category, setCategory] = useState('')
@@ -29,6 +29,7 @@ export default function ExpenseInput() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [originalAmount, setOriginalAmount] = useState(0)
+  const [editLoaded, setEditLoaded] = useState(!editId)
 
   useEffect(() => {
     if (!editId || !meetingId) return
@@ -39,9 +40,10 @@ export default function ExpenseInput() {
       setOriginalAmount(data.amount ?? 0)
       setCategory(data.category ?? '')
       setMemo(data.memo ?? '')
-      setPaidBy(data.paidBy ?? uid)
+      setPaidBy(data.paidBy ?? '')
+      setEditLoaded(true)
     })
-  }, [editId, meetingId, uid])
+  }, [editId, meetingId])
 
   function handleAmountChange(e: React.ChangeEvent<HTMLInputElement>) {
     const raw = e.target.value.replace(/[^0-9]/g, '')
@@ -89,7 +91,7 @@ export default function ExpenseInput() {
     }
   }
 
-  const isValid = Number(amount) > 0 && paidBy !== '' && !submitting
+  const isValid = Number(amount) > 0 && paidBy !== '' && !submitting && editLoaded
 
   return (
     <>
