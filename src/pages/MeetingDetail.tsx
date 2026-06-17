@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { Asset, BottomSheet, ConfirmDialog, FixedBottomCTA, List, ListRow, Top, useBottomSheet } from '@toss/tds-mobile'
 import { doc, updateDoc, writeBatch, increment, arrayUnion } from 'firebase/firestore'
 import { formatKRW } from '../utils/format'
+import { COLORS } from '../styles/tokens'
 import { db } from '../lib/firebase'
 import { uploadImage } from '../lib/cloudinary'
 import { shareInviteLink } from '../lib/bridge'
@@ -38,7 +39,7 @@ const OVERLAY_GRADIENT = 'linear-gradient(to bottom, transparent 25%, rgba(0,0,0
 export default function MeetingDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { meeting, members, expenses, loading } = useMeeting(id)
+  const { meeting, members, expenses, loading, error } = useMeeting(id)
   const { uid, setUser } = useUserStore()
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState(false)
@@ -52,6 +53,7 @@ export default function MeetingDetail() {
   const [confirmDeleteMeeting, setConfirmDeleteMeeting] = useState(false)
   const [deletingMeeting, setDeletingMeeting] = useState(false)
   const [deletePreMemberTarget, setDeletePreMemberTarget] = useState<string | null>(null)
+  const [actionError, setActionError] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { open: openManageSheet, close: closeManageSheet } = useBottomSheet()
   const isSettled = meeting?.status === 'settled'
@@ -148,10 +150,19 @@ export default function MeetingDetail() {
     }
   }
 
+  function showActionError(msg: string) {
+    setActionError(msg)
+    setTimeout(() => setActionError(''), 3000)
+  }
+
   async function handleReopenMeeting() {
     if (!id) return
     closeManageSheet()
-    await updateDoc(doc(db, 'meetings', id), { status: 'active' })
+    try {
+      await updateDoc(doc(db, 'meetings', id), { status: 'active' })
+    } catch {
+      showActionError('다시 열지 못했어요. 다시 시도해주세요.')
+    }
   }
 
   async function handleDeleteMeeting() {
@@ -168,6 +179,8 @@ export default function MeetingDetail() {
       batch.delete(doc(db, 'meetings', id))
       await batch.commit()
       navigate('/')
+    } catch {
+      showActionError('삭제하지 못했어요. 다시 시도해주세요.')
     } finally {
       setDeletingMeeting(false)
     }
@@ -245,7 +258,11 @@ export default function MeetingDetail() {
       totalAmount: increment(-totalToRemove),
       expenseCount: increment(-preMemberExpenses.length),
     })
-    await batch.commit()
+    try {
+      await batch.commit()
+    } catch {
+      showActionError('멤버를 삭제하지 못했어요. 다시 시도해주세요.')
+    }
   }
 
   async function handleDeleteExpense(expenseId: string) {
@@ -258,7 +275,11 @@ export default function MeetingDetail() {
       totalAmount: increment(-expense.amount),
       expenseCount: increment(-1),
     })
-    await batch.commit()
+    try {
+      await batch.commit()
+    } catch {
+      showActionError('비용을 삭제하지 못했어요. 다시 시도해주세요.')
+    }
   }
 
   if (loading) {
@@ -279,6 +300,21 @@ export default function MeetingDetail() {
     )
   }
 
+  if (error) {
+    return (
+      <>
+        <Top title={<Top.TitleParagraph size={22}>정산방</Top.TitleParagraph>} />
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 'calc(100vh - 56px)', gap: 8 }}>
+          <p style={{ fontSize: 16, fontWeight: 600, margin: 0, color: '#191919' }}>정보를 불러오지 못했어요</p>
+          <p style={{ fontSize: 14, color: '#888', margin: '0 0 16px' }}>잠시 후 다시 시도해주세요</p>
+          <button onClick={() => navigate(-1)} style={{ padding: '12px 24px', fontSize: 14, fontWeight: 600, border: 'none', borderRadius: 10, background: '#3182F6', color: '#fff', cursor: 'pointer' }}>
+            돌아가기
+          </button>
+        </div>
+      </>
+    )
+  }
+
   if (!meeting) {
     return (
       <>
@@ -290,18 +326,21 @@ export default function MeetingDetail() {
             alignItems: 'center',
             justifyContent: 'center',
             height: 'calc(100vh - 56px)',
-            gap: 16,
+            gap: 8,
           }}
         >
-          <p style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>정산방을 찾을 수 없어요</p>
+          <p style={{ fontSize: 16, fontWeight: 600, margin: 0, color: '#191919' }}>정산방을 찾을 수 없어요</p>
+          <p style={{ fontSize: 14, color: '#888', margin: '0 0 16px' }}>삭제됐거나 잘못된 링크예요</p>
           <button
             onClick={() => navigate('/')}
             style={{
-              padding: '10px 20px',
+              padding: '12px 24px',
               fontSize: 14,
-              border: '1px solid #d8d8d8',
-              borderRadius: 8,
-              background: '#fff',
+              fontWeight: 600,
+              border: 'none',
+              borderRadius: 10,
+              background: '#3182F6',
+              color: '#fff',
               cursor: 'pointer',
             }}
           >
@@ -590,7 +629,7 @@ export default function MeetingDetail() {
                     color: '#333',
                   }}
                 >
-                  {memberUid === uid ? '나' : name}
+                  {memberUid === uid ? `${name}(나)` : name}
                   {canDeleteMember && (
                     <button
                       onClick={() => setDeletePreMemberTarget(memberUid)}
@@ -716,7 +755,7 @@ export default function MeetingDetail() {
                   {myBalance !== 0 ? (
                     <>
                       정산 후{' '}
-                      <span style={{ color: myBalance > 0 ? '#00C471' : '#3182F6' }}>
+                      <span style={{ color: myBalance > 0 ? COLORS.primary : COLORS.error }}>
                         {formatKRW(myBalance > 0 ? myBalance : Math.abs(myBalance))}
                       </span>
                       {myBalance > 0 ? ' 받아요' : ' 내야 해요'}
@@ -819,6 +858,12 @@ export default function MeetingDetail() {
       >
         {isSettled ? '정산 결과 보기' : '비용 추가하기'}
       </FixedBottomCTA>
+
+      {actionError && (
+        <div style={{ position: 'fixed', bottom: 80, left: 0, right: 0, background: 'rgba(0,0,0,0.75)', color: '#fff', textAlign: 'center', padding: '12px 20px', fontSize: 14, zIndex: 100 }}>
+          {actionError}
+        </div>
+      )}
 
       <ConfirmDialog
         open={deleteTargetId !== null}

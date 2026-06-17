@@ -4,17 +4,18 @@ import { FixedBottomCTA, Top } from '@toss/tds-mobile'
 import { doc, updateDoc } from 'firebase/firestore'
 import { db } from '../lib/firebase'
 import { formatKRW } from '../utils/format'
+import { COLORS } from '../styles/tokens'
 import { useMeeting } from '../hooks/useMeeting'
 import { calculateSettlements, type Settlement } from '../utils/settle'
 import { useUserStore } from '../store/userStore'
-import { shareText } from '../lib/bridge'
+import { openExternalUrl, shareText } from '../lib/bridge'
 import ResultScreen from '../components/ResultScreen'
 
 export default function Settle() {
   const { id: meetingId } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { uid } = useUserStore()
-  const { meeting, members, expenses, loading } = useMeeting(meetingId)
+  const { meeting, members, expenses, loading, error } = useMeeting(meetingId)
   const [settling, setSettling] = useState(false)
   const [settleSuccess, setSettleSuccess] = useState(false)
 
@@ -36,7 +37,7 @@ export default function Settle() {
 
   function handleSendToToss(s: Settlement) {
     const url = `supertoss://send?amount=${s.amount}&bank=토스&accountNo=&origin=정산&message=${encodeURIComponent(`${s.fromName}→${s.toName} 정산`)}`
-    window.location.href = url
+    openExternalUrl(url)
   }
 
   async function handleShare() {
@@ -50,7 +51,11 @@ export default function Settle() {
         (s) => `${s.fromName} → ${s.toName}: ${s.amount.toLocaleString('ko-KR')}원`,
       ),
     ]
-    await shareText(lines.join('\n'))
+    try {
+      await shareText(lines.join('\n'))
+    } catch {
+      // 공유 취소 또는 Bridge 오류 — 사용자 액션이므로 조용히 무시
+    }
   }
 
   async function handleSettle() {
@@ -77,6 +82,21 @@ export default function Settle() {
           }}
         >
           <p style={{ fontSize: 14, color: '#8b8b8b', margin: 0 }}>계산하는 중...</p>
+        </div>
+      </>
+    )
+  }
+
+  if (error) {
+    return (
+      <>
+        <Top title={<Top.TitleParagraph size={22}>정산 결과</Top.TitleParagraph>} />
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 'calc(100vh - 56px)', gap: 8 }}>
+          <p style={{ fontSize: 16, fontWeight: 600, margin: 0, color: '#191919' }}>정보를 불러오지 못했어요</p>
+          <p style={{ fontSize: 14, color: '#888', margin: '0 0 16px' }}>잠시 후 다시 시도해주세요</p>
+          <button onClick={() => navigate(-1)} style={{ padding: '12px 24px', fontSize: 14, fontWeight: 600, border: 'none', borderRadius: 10, background: '#3182F6', color: '#fff', cursor: 'pointer' }}>
+            돌아가기
+          </button>
         </div>
       </>
     )
@@ -109,6 +129,21 @@ export default function Settle() {
             }}
           >
             홈으로
+          </button>
+        </div>
+      </>
+    )
+  }
+
+  if (!members[uid]) {
+    return (
+      <>
+        <Top title={<Top.TitleParagraph size={22}>정산 결과</Top.TitleParagraph>} />
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 'calc(100vh - 56px)', gap: 8 }}>
+          <p style={{ fontSize: 16, fontWeight: 600, margin: 0, color: '#191919' }}>참여하지 않은 정산방이에요</p>
+          <p style={{ fontSize: 14, color: '#888', margin: '0 0 16px' }}>먼저 정산방에 참여해주세요</p>
+          <button onClick={() => navigate(-1)} style={{ padding: '12px 24px', fontSize: 14, fontWeight: 600, border: 'none', borderRadius: 10, background: '#3182F6', color: '#fff', cursor: 'pointer' }}>
+            돌아가기
           </button>
         </div>
       </>
@@ -171,7 +206,7 @@ export default function Settle() {
                 >
                   <span style={{ fontSize: 15, color: '#191919' }}>나 → {s.toName}</span>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 15, fontWeight: 600, color: '#ef4444' }}>
+                    <span style={{ fontSize: 15, fontWeight: 600, color: COLORS.error }}>
                       {formatKRW(s.amount)}
                     </span>
                     <button
@@ -187,7 +222,7 @@ export default function Settle() {
                         cursor: 'pointer',
                       }}
                     >
-                      토스로 보내기
+                      토스 송금
                     </button>
                   </div>
                 </div>
@@ -213,7 +248,7 @@ export default function Settle() {
                   }}
                 >
                   <span style={{ fontSize: 15, color: '#191919' }}>{s.fromName} → 나</span>
-                  <span style={{ fontSize: 15, fontWeight: 600, color: '#22c55e' }}>
+                  <span style={{ fontSize: 15, fontWeight: 600, color: COLORS.primary }}>
                     +{formatKRW(s.amount)}
                   </span>
                 </div>

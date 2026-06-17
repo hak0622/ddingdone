@@ -1,0 +1,28 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    match /meetings/{meetingId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
+      allow delete: if isAuthenticated();
+
+      match /members/{memberId} {
+        allow read, write: if isAuthenticated();
+      }
+
+      match /expenses/{expenseId} {
+        allow read, write: if isAuthenticated();
+      }
+    }
+
+    match /users/{userId} {
+      allow read, write: if isAuthenticated();
+    }
+  }
+}

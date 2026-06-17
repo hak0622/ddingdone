@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react'
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom'
 import ErrorBoundary from './components/ErrorBoundary'
 
-import { signInAnonymously } from './lib/firebase'
+import { collection, doc, getDoc, getDocs, limit, query, where } from 'firebase/firestore'
+import { db, signInAnonymously } from './lib/firebase'
 import { getAnonymousUid } from './lib/bridge'
 import { useUserStore } from './store/userStore'
 import BottomTabBar from './components/BottomTabBar'
@@ -15,37 +16,80 @@ import MeetingDetail from './pages/MeetingDetail'
 import ExpenseInput from './pages/ExpenseInput'
 import Settle from './pages/Settle'
 import MeetingEdit from './pages/MeetingEdit'
+import TermsOfService from './pages/TermsOfService'
+import PrivacyPolicy from './pages/PrivacyPolicy'
 
 const NICKNAME_KEY = 'ddingdone_nickname'
-const UID_KEY = 'ddingdone_uid'
 
 function AppInit() {
   const [ready, setReady] = useState(false)
+  const [initError, setInitError] = useState(false)
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const setUser = useUserStore((s) => s.setUser)
 
   useEffect(() => {
     async function init() {
-      let uid = localStorage.getItem(UID_KEY) ?? ''
-      if (!uid) {
-        const tossUid = await getAnonymousUid()
-        uid = tossUid ?? (await signInAnonymously())
-        localStorage.setItem(UID_KEY, uid)
-      }
+      try {
+        const tossKey = await getAnonymousUid()
+        const firebaseUid = await signInAnonymously()
+        // tossKey: Toss 계정 기반 (IP·기기·캐시 변경에 불변)
+        // firebaseUid: 브라우저 환경 폴백 (origin에 묶임)
+        const uid = tossKey ?? firebaseUid
 
-      const nickname = localStorage.getItem(NICKNAME_KEY) ?? ''
-      setUser(uid, nickname)
-      setReady(true)
+        if (!uid) {
+          setInitError(true)
+          setReady(true)
+          return
+        }
 
-      const meetingId = searchParams.get('meeting')
-      if (meetingId) {
-        navigate(`/meetings/${meetingId}`, { replace: true })
-        return
-      }
+        let nickname = localStorage.getItem(NICKNAME_KEY) ?? ''
 
-      if (!nickname) {
-        navigate('/onboarding', { replace: true })
+        if (!nickname && tossKey) {
+          // Toss 앱 환경: /users/{uid}(=tossKey)에서 닉네임 복구
+          try {
+            const userDoc = await getDoc(doc(db, 'users', uid))
+            if (userDoc.exists()) {
+              const fetched = userDoc.data().nickname as string
+              if (fetched) {
+                nickname = fetched
+                localStorage.setItem(NICKNAME_KEY, fetched)
+              }
+            }
+          } catch { /* 조회 실패 시 계속 진행 */ }
+        }
+
+        if (!nickname) {
+          // Fallback: uid로 meetings에서 닉네임 복구
+          try {
+            const q = query(collection(db, 'meetings'), where('memberUids', 'array-contains', uid), limit(1))
+            const snap = await getDocs(q)
+            if (!snap.empty) {
+              const memberDoc = await getDoc(doc(db, 'meetings', snap.docs[0].id, 'members', uid))
+              const fetched = memberDoc.exists() ? (memberDoc.data().nickname as string) : ''
+              if (fetched) {
+                nickname = fetched
+                localStorage.setItem(NICKNAME_KEY, fetched)
+              }
+            }
+          } catch { /* 조회 실패 시 onboarding으로 진행 */ }
+        }
+
+        setUser(uid, nickname, tossKey)
+        setReady(true)
+
+        const meetingId = searchParams.get('meeting')
+        if (meetingId) {
+          navigate(`/meetings/${meetingId}`, { replace: true })
+          return
+        }
+
+        if (!nickname) {
+          navigate('/onboarding', { replace: true })
+        }
+      } catch {
+        setInitError(true)
+        setReady(true)
       }
     }
 
@@ -54,15 +98,23 @@ function AppInit() {
 
   if (!ready) {
     return (
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          height: '100vh',
-        }}
-      >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh' }}>
         <p style={{ fontSize: 14, color: '#8b8b8b', margin: 0 }}>불러오는 중...</p>
+      </div>
+    )
+  }
+
+  if (initError) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 12 }}>
+        <p style={{ fontSize: 16, fontWeight: 600, margin: 0, color: '#191919' }}>앱을 시작할 수 없어요</p>
+        <p style={{ fontSize: 14, color: '#8b8b8b', margin: 0 }}>잠시 후 다시 시도해주세요</p>
+        <button
+          onClick={() => window.location.reload()}
+          style={{ marginTop: 8, padding: '12px 28px', fontSize: 14, fontWeight: 600, border: 'none', borderRadius: 10, background: '#3182F6', color: '#fff', cursor: 'pointer' }}
+        >
+          다시 시도
+        </button>
       </div>
     )
   }
@@ -90,6 +142,8 @@ export default function App() {
             <Route path="/meetings/:id/edit" element={<MeetingEdit />} />
             <Route path="/meetings/:id/expense" element={<ExpenseInput />} />
             <Route path="/meetings/:id/settle" element={<Settle />} />
+            <Route path="/terms" element={<TermsOfService />} />
+            <Route path="/privacy" element={<PrivacyPolicy />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>

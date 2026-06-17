@@ -1,17 +1,71 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { TextField, Top } from '@toss/tds-mobile'
 import { COLORS } from '../styles/tokens'
-import { collection, doc, getDocs, query, where, writeBatch } from 'firebase/firestore'
+import { collection, doc, getDocs, query, setDoc, where, writeBatch } from 'firebase/firestore'
 import { db } from '../lib/firebase'
 import { useUserStore } from '../store/userStore'
 
 const NICKNAME_KEY = 'ddingdone_nickname'
+const APP_VERSION = '0.1.0'
+
+function Row({ label, onPress }: { label: string; onPress: () => void }) {
+  return (
+    <button
+      onClick={onPress}
+      style={{
+        width: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '16px 0',
+        background: 'none',
+        border: 'none',
+        cursor: 'pointer',
+        textAlign: 'left',
+      }}
+    >
+      <span style={{ fontSize: 15, color: '#191919' }}>{label}</span>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+        <path d="M9 5l7 7-7 7" stroke="#c0c0c0" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </button>
+  )
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '16px 0',
+      }}
+    >
+      <span style={{ fontSize: 15, color: '#191919' }}>{label}</span>
+      <span style={{ fontSize: 14, color: '#888' }}>{value}</span>
+    </div>
+  )
+}
+
+function Divider() {
+  return <div style={{ height: 1, background: '#f0f0f0' }} />
+}
+
+function SectionLabel({ label }: { label: string }) {
+  return (
+    <p style={{ fontSize: 13, fontWeight: 600, color: '#888', margin: '24px 0 8px' }}>{label}</p>
+  )
+}
 
 export default function Settings() {
-  const { uid, nickname, setUser } = useUserStore()
+  const navigate = useNavigate()
+  const { uid, nickname, tossKey, setUser } = useUserStore()
   const [value, setValue] = useState(nickname)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [syncError, setSyncError] = useState(false)
 
   async function handleSave() {
     const trimmed = value.trim()
@@ -28,49 +82,78 @@ export default function Settings() {
         batch.update(doc(db, 'meetings', meetingDoc.id, 'members', uid), { nickname: trimmed })
       })
       await batch.commit()
+      if (tossKey) {
+        await setDoc(doc(db, 'users', uid), { nickname: trimmed }, { merge: true })
+      }
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
-    } catch (err) {
-      console.error('닉네임 동기화 실패', err)
+    } catch {
+      setSyncError(true)
+      setTimeout(() => setSyncError(false), 3000)
     } finally {
       setSaving(false)
     }
   }
 
-  const canSave = value.trim().length > 0 && value.trim() !== nickname && !saving
+  const canSave = value.trim().length > 0 && !saving
 
   return (
     <>
       <Top title={<Top.TitleParagraph size={22}>설정</Top.TitleParagraph>} />
-      <div style={{ padding: '24px 20px 0', display: 'flex', flexDirection: 'column', gap: 24 }}>
-        <TextField
-          variant="box"
-          labelOption="sustain"
-          label="닉네임"
-          value={value}
-          onChange={(e) => {
-            setValue(e.target.value)
-            setSaved(false)
-          }}
-        />
-        <button
-          onClick={handleSave}
-          disabled={!canSave}
-          style={{
-            width: '100%',
-            padding: '16px 0',
-            fontSize: 16,
-            fontWeight: 700,
-            border: 'none',
-            borderRadius: 12,
-            background: saved ? COLORS.success : canSave ? COLORS.primary : COLORS.disabled,
-            color: canSave ? COLORS.background : COLORS.disabledText,
-            cursor: canSave ? 'pointer' : 'default',
-            transition: 'background 0.2s',
-          }}
-        >
-          {saving ? '저장 중...' : saved ? '저장됐어요!' : '저장하기'}
-        </button>
+      <div style={{ padding: '24px 20px 100px' }}>
+
+        {/* 내 정보 */}
+        <SectionLabel label="내 정보" />
+        <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #f0f0f0', padding: '0 16px' }}>
+          <div style={{ padding: '16px 0' }}>
+            <TextField
+              variant="box"
+              labelOption="sustain"
+              label="닉네임"
+              value={value}
+              onChange={(e) => {
+                setValue(e.target.value)
+                setSaved(false)
+              }}
+              maxLength={20}
+            />
+            <button
+              onClick={handleSave}
+              disabled={!canSave}
+              style={{
+                width: '100%',
+                marginTop: 12,
+                padding: '14px 0',
+                fontSize: 15,
+                fontWeight: 700,
+                border: 'none',
+                borderRadius: 10,
+                background: saved ? COLORS.success : canSave ? COLORS.primary : COLORS.disabled,
+                color: canSave ? COLORS.background : COLORS.disabledText,
+                cursor: canSave ? 'pointer' : 'default',
+                transition: 'background 0.2s',
+              }}
+            >
+              {saving ? '저장 중...' : saved ? '저장됐어요!' : '저장하기'}
+            </button>
+            {syncError && (
+              <p style={{ fontSize: 13, color: '#ef4444', margin: '8px 0 0', textAlign: 'center' }}>
+                동기화에 실패했어요. 로컬에는 저장됐어요.
+              </p>
+            )}
+          </div>
+        </div>
+
+        {/* 정보 */}
+        <SectionLabel label="정보" />
+        <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #f0f0f0', padding: '0 16px' }}>
+          <Row label="이용약관" onPress={() => navigate('/terms')} />
+          <Divider />
+          <Row label="개인정보처리방침" onPress={() => navigate('/privacy')} />
+          <Divider />
+          <InfoRow label="앱 버전" value={APP_VERSION} />
+        </div>
+
       </div>
     </>
   )

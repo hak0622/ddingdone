@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Top } from '@toss/tds-mobile'
+import { Asset, Top } from '@toss/tds-mobile'
 import { useUserStore } from '../store/userStore'
 import { useMeetings } from '../hooks/useMeetings'
 import MeetingCard from '../components/MeetingCard'
@@ -56,11 +56,20 @@ export default function History() {
             alignItems: 'center',
             justifyContent: 'center',
             height: 'calc(100vh - 56px - 60px)',
-            gap: 8,
+            gap: 0,
           }}
         >
-          <p style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>아직 정산방이 없어요</p>
-          <p style={{ fontSize: 14, color: COLORS.textSecondary, margin: 0 }}>
+          <div style={{ width: 80, height: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', alignSelf: 'center', marginBottom: 16 }}>
+            <Asset.Icon
+              frameShape={Asset.frameShape.CleanW100}
+              backgroundColor="transparent"
+              name="icon-calendar-clock"
+              aria-hidden={true}
+              ratio="1/1"
+            />
+          </div>
+          <p style={{ fontSize: 22, fontWeight: 700, margin: '0 0 12px', color: '#191919' }}>아직 정산방이 없어요</p>
+          <p style={{ fontSize: 15, color: '#8b8b8b', margin: 0 }}>
             홈 탭에서 첫 정산방을 만들어보세요
           </p>
         </div>

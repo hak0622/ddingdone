@@ -30,6 +30,7 @@ export function useMeeting(meetingId: string | undefined) {
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [meetingReady, setMeetingReady] = useState(false)
   const [membersReady, setMembersReady] = useState(false)
+  const [error, setError] = useState(false)
 
   const loading = !meetingReady || !membersReady
 
@@ -42,52 +43,63 @@ export function useMeeting(meetingId: string | undefined) {
 
     setMeetingReady(false)
     setMembersReady(false)
+    setError(false)
 
-    const meetingUnsub = onSnapshot(doc(db, 'meetings', meetingId), (snap) => {
-      if (snap.exists()) {
-        const data = snap.data()
-        setMeeting({
-          id: snap.id,
-          name: data.name,
-          date: data.date,
-          memo: data.memo,
-          createdBy: data.createdBy,
-          photoUrl: data.photoUrl ?? null,
-          status: data.status ?? 'active',
-        })
-      } else {
-        setMeeting(null)
-      }
-      setMeetingReady(true)
-    })
+    const meetingUnsub = onSnapshot(
+      doc(db, 'meetings', meetingId),
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data()
+          setMeeting({
+            id: snap.id,
+            name: data.name,
+            date: data.date,
+            memo: data.memo,
+            createdBy: data.createdBy,
+            photoUrl: data.photoUrl ?? null,
+            status: data.status ?? 'active',
+          })
+        } else {
+          setMeeting(null)
+        }
+        setMeetingReady(true)
+      },
+      () => { setError(true); setMeetingReady(true) },
+    )
 
-    const membersUnsub = onSnapshot(collection(db, 'meetings', meetingId, 'members'), (snap) => {
-      const map: MemberMap = {}
-      snap.forEach((d) => {
-        map[d.id] = d.data().nickname
-      })
-      setMembers(map)
-      setMembersReady(true)
-    })
+    const membersUnsub = onSnapshot(
+      collection(db, 'meetings', meetingId, 'members'),
+      (snap) => {
+        const map: MemberMap = {}
+        snap.forEach((d) => { map[d.id] = d.data().nickname })
+        setMembers(map)
+        setMembersReady(true)
+      },
+      () => { setError(true); setMembersReady(true) },
+    )
 
     const expensesQuery = query(
       collection(db, 'meetings', meetingId, 'expenses'),
       orderBy('createdAt', 'asc'),
     )
-    const expensesUnsub = onSnapshot(expensesQuery, (snap) => {
-      const list: Expense[] = []
-      snap.forEach((d) => {
-        const data = d.data()
-        list.push({
-          id: d.id,
-          amount: data.amount,
-          paidBy: data.paidBy,
-          memo: data.memo ?? '',
-          category: data.category ?? '',
+    const expensesUnsub = onSnapshot(
+      expensesQuery,
+      (snap) => {
+        const list: Expense[] = []
+        snap.forEach((d) => {
+          const data = d.data()
+          list.push({
+            id: d.id,
+            amount: data.amount,
+            paidBy: data.paidBy,
+            memo: data.memo ?? '',
+            category: data.category ?? '',
+          })
         })
-      })
-      setExpenses(list)
-    })
+        setExpenses(list)
+      },
+      () => { setError(true) },
+    )
 
     return () => {
       meetingUnsub()
@@ -96,7 +108,7 @@ export function useMeeting(meetingId: string | undefined) {
     }
   }, [meetingId])
 
-  return { meeting, members, expenses, loading }
+  return { meeting, members, expenses, loading, error }
 }
 
 export function useMeetingMembers(meetingId: string | undefined) {
@@ -106,12 +118,16 @@ export function useMeetingMembers(meetingId: string | undefined) {
   useEffect(() => {
     if (!meetingId) { setLoading(false); return }
     setLoading(true)
-    const unsub = onSnapshot(collection(db, 'meetings', meetingId, 'members'), (snap) => {
-      const map: MemberMap = {}
-      snap.forEach((d) => { map[d.id] = d.data().nickname })
-      setMembers(map)
-      setLoading(false)
-    })
+    const unsub = onSnapshot(
+      collection(db, 'meetings', meetingId, 'members'),
+      (snap) => {
+        const map: MemberMap = {}
+        snap.forEach((d) => { map[d.id] = d.data().nickname })
+        setMembers(map)
+        setLoading(false)
+      },
+      () => { setLoading(false) },
+    )
     return () => unsub()
   }, [meetingId])
 

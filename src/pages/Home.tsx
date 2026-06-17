@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Top } from '@toss/tds-mobile'
+import { Asset, Top } from '@toss/tds-mobile'
 import { useUserStore } from '../store/userStore'
 import { useMeetings } from '../hooks/useMeetings'
 import type { MeetingListItem } from '../hooks/useMeetings'
@@ -79,6 +79,46 @@ export default function Home() {
           }}
         >
           <p style={{ fontSize: 14, color: '#8b8b8b', margin: 0 }}>불러오는 중...</p>
+        </div>
+      ) : meetings.length === 0 ? (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: 'calc(100vh - 56px - 60px)',
+            padding: '0 24px',
+            gap: 0,
+          }}
+        >
+          <div style={{ width: 80, height: 80, marginBottom: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', alignSelf: 'center' }}>
+            <Asset.Icon
+              frameShape={Asset.frameShape.CleanW100}
+              backgroundColor="transparent"
+              name="icon-bnpl-fill"
+              aria-hidden={true}
+              ratio="1/1"
+            />
+          </div>
+          <p style={{ fontSize: 22, fontWeight: 700, margin: '0 0 12px', color: '#191919', textAlign: 'center' }}>모임 정산을 쉽게</p>
+          <p style={{ fontSize: 15, color: '#8b8b8b', margin: '0 0 32px', textAlign: 'center', lineHeight: 1.6, whiteSpace: 'pre-line' }}>{'모임 비용을 빠르게 계산하고\n사진으로 추억을 기록해보세요'}</p>
+          <button
+            onClick={() => navigate(`/meetings/new?date=${todayStr}`)}
+            style={{
+              width: '100%',
+              padding: '16px 0',
+              fontSize: 16,
+              fontWeight: 700,
+              border: 'none',
+              borderRadius: 14,
+              background: '#3182F6',
+              color: '#fff',
+              cursor: 'pointer',
+            }}
+          >
+            새 정산방 만들기
+          </button>
         </div>
       ) : (
         <div style={{ padding: '0 20px 100px' }}>
@@ -241,8 +281,8 @@ export default function Home() {
                           </svg>
                         </div>
                       )}
-                      {/* 2개 이상: 숫자 배지 */}
-                      {dayMeetings.length > 1 && (
+                      {/* 1개 이상: 숫자 배지 */}
+                      {dayMeetings.length >= 1 && (
                         <div
                           style={{
                             position: 'absolute',

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { FixedBottomCTA, Top } from '@toss/tds-mobile'
-import { collection, addDoc, updateDoc, getDoc, doc, serverTimestamp, increment } from 'firebase/firestore'
+import { Top } from '@toss/tds-mobile'
+import { collection, getDoc, doc, serverTimestamp, increment, writeBatch } from 'firebase/firestore'
 import { db } from '../lib/firebase'
 import { useMeetingMembers } from '../hooks/useMeeting'
 import { useUserStore } from '../store/userStore'
@@ -32,15 +32,28 @@ export default function ExpenseInput() {
   const [editLoaded, setEditLoaded] = useState(!editId)
 
   useEffect(() => {
+    if (!meetingId) return
+    getDoc(doc(db, 'meetings', meetingId)).then((snap) => {
+      if (snap.exists() && snap.data().status === 'settled') navigate(-1)
+    })
+  }, [meetingId])
+
+  useEffect(() => {
     if (!editId || !meetingId) return
     getDoc(doc(db, 'meetings', meetingId, 'expenses', editId)).then((snap) => {
-      if (!snap.exists()) return
+      if (!snap.exists()) {
+        navigate(-1)
+        return
+      }
       const data = snap.data()
       setAmount(String(data.amount ?? ''))
       setOriginalAmount(data.amount ?? 0)
       setCategory(data.category ?? '')
       setMemo(data.memo ?? '')
       setPaidBy(data.paidBy ?? '')
+      setEditLoaded(true)
+    }).catch(() => {
+      setError('비용을 불러오지 못했어요.')
       setEditLoaded(true)
     })
   }, [editId, meetingId])
@@ -60,29 +73,32 @@ export default function ExpenseInput() {
     setSubmitting(true)
     setError('')
     try {
+      const batch = writeBatch(db)
       if (editId) {
-        await updateDoc(doc(db, 'meetings', meetingId, 'expenses', editId), {
+        batch.update(doc(db, 'meetings', meetingId, 'expenses', editId), {
           amount: Number(amount),
           category,
           paidBy,
           memo,
         })
-        await updateDoc(doc(db, 'meetings', meetingId), {
+        batch.update(doc(db, 'meetings', meetingId), {
           totalAmount: increment(Number(amount) - originalAmount),
         })
       } else {
-        await addDoc(collection(db, 'meetings', meetingId, 'expenses'), {
+        const expenseRef = doc(collection(db, 'meetings', meetingId, 'expenses'))
+        batch.set(expenseRef, {
           amount: Number(amount),
           category,
           paidBy,
           memo,
           createdAt: serverTimestamp(),
         })
-        await updateDoc(doc(db, 'meetings', meetingId), {
+        batch.update(doc(db, 'meetings', meetingId), {
           totalAmount: increment(Number(amount)),
           expenseCount: increment(1),
         })
       }
+      await batch.commit()
       navigate(-1)
     } catch {
       setError(editId ? '비용을 수정하지 못했어요. 다시 시도해주세요.' : '비용을 추가하지 못했어요. 다시 시도해주세요.')
@@ -96,7 +112,7 @@ export default function ExpenseInput() {
   return (
     <>
       <Top title={<Top.TitleParagraph size={22}>{editId ? '비용 수정' : '비용 추가'}</Top.TitleParagraph>} />
-      <div style={{ padding: '0 20px 100px' }}>
+      <div style={{ padding: '0 20px 32px' }}>
 
         {/* 금액 */}
         <div style={{ textAlign: 'center', padding: '20px 0 18px' }}>
@@ -163,7 +179,7 @@ export default function ExpenseInput() {
             style={{
               width: '100%',
               padding: '12px 14px',
-              fontSize: 14,
+              fontSize: 16,
               border: '1px solid #e0e0e0',
               borderRadius: 10,
               outline: 'none',
@@ -202,16 +218,32 @@ export default function ExpenseInput() {
             </div>
           )}
         </div>
-      </div>
 
-      {error && (
-        <p style={{ fontSize: 13, color: '#ef4444', textAlign: 'center', padding: '0 20px 12px', margin: 0 }}>
-          {error}
-        </p>
-      )}
-      <FixedBottomCTA disabled={!isValid} onClick={handleSubmit}>
-        {editId ? (submitting ? '수정 중...' : '수정하기') : (submitting ? '추가 중...' : '추가하기')}
-      </FixedBottomCTA>
+        {error && (
+          <p style={{ fontSize: 13, color: '#ef4444', textAlign: 'center', padding: '12px 0 0', margin: 0 }}>
+            {error}
+          </p>
+        )}
+        <button
+          disabled={!isValid}
+          onClick={handleSubmit}
+          style={{
+            display: 'block',
+            width: '100%',
+            marginTop: 24,
+            height: 56,
+            background: isValid ? '#3182F6' : '#e0e0e0',
+            color: isValid ? '#fff' : '#aaa',
+            border: 'none',
+            borderRadius: 12,
+            fontSize: 17,
+            fontWeight: 600,
+            cursor: isValid ? 'pointer' : 'default',
+          }}
+        >
+          {editId ? (submitting ? '수정 중...' : '수정하기') : (submitting ? '추가 중...' : '추가하기')}
+        </button>
+      </div>
     </>
   )
 }

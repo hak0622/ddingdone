@@ -34,26 +34,30 @@ export function useMeetings(uid: string) {
       collection(db, 'meetings'),
       where('memberUids', 'array-contains', uid)
     )
-    const unsub = onSnapshot(q, (snap) => {
-      const results: MeetingListItem[] = snap.docs.map((d) => {
-        const data = d.data()
-        return {
-          id: d.id,
-          name: data.name,
-          date: data.date,
-          memberCount: data.memberCount ?? 0,
-          totalAmount: data.totalAmount ?? 0,
-          expenseCount: data.expenseCount ?? 0,
-          status: data.status ?? 'active',
-          photoUrl: data.photoUrl ?? null,
-        }
-      })
-      results.sort((a, b) => (a.date < b.date ? 1 : -1))
-      _cache = results
-      _cacheUid = uid
-      setMeetings(results)
-      setLoading(false)
-    })
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const results: MeetingListItem[] = snap.docs.map((d) => {
+          const data = d.data()
+          return {
+            id: d.id,
+            name: data.name,
+            date: data.date,
+            memberCount: data.memberCount ?? 0,
+            totalAmount: data.totalAmount ?? 0,
+            expenseCount: data.expenseCount ?? 0,
+            status: data.status ?? 'active',
+            photoUrl: data.photoUrl ?? null,
+          }
+        })
+        results.sort((a, b) => (a.date < b.date ? 1 : -1))
+        _cache = results
+        _cacheUid = uid
+        setMeetings(results)
+        setLoading(false)
+      },
+      () => { setLoading(false) },
+    )
 
     return () => {
       unsub()

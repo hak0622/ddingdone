@@ -1,6 +1,7 @@
 import {
   getAnonymousKey,
   getTossShareLink,
+  openURL,
   share,
 } from '@apps-in-toss/web-framework'
 
@@ -14,8 +15,9 @@ export async function getAnonymousUid(): Promise<string | null> {
   if (!isInsideTossApp()) return null
   try {
     const result = await getAnonymousKey()
-    if (!result || result === 'ERROR') return null
-    return result.hash
+    if (!result || typeof result === 'string') return null
+    if (result.type === 'HASH') return result.hash
+    return null
   } catch {
     return null
   }
@@ -41,5 +43,15 @@ export async function shareText(message: string): Promise<void> {
     await share({ message })
   } catch {
     await navigator.clipboard.writeText(message)
+  }
+}
+
+// 외부 URL/딥링크 열기 (예: supertoss://)
+export async function openExternalUrl(url: string): Promise<void> {
+  try {
+    await openURL(url)
+  } catch {
+    // 브라우저 개발 환경 fallback
+    window.location.href = url
   }
 }
