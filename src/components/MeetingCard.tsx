@@ -7,7 +7,7 @@ interface Props {
 
 export default function MeetingCard({ meeting, onClick }: Props) {
   const perPerson =
-    meeting.memberCount > 0 ? Math.round(meeting.totalAmount / meeting.memberCount) : 0
+    meeting.memberCount > 0 ? Math.floor(meeting.totalAmount / meeting.memberCount) : 0
 
   return (
     <div

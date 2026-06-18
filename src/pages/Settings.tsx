@@ -73,7 +73,7 @@ export default function Settings() {
     setSaving(true)
     try {
       localStorage.setItem(NICKNAME_KEY, trimmed)
-      setUser(uid, trimmed)
+      setUser(uid, trimmed, tossKey)
 
       const q = query(collection(db, 'meetings'), where('memberUids', 'array-contains', uid))
       const meetingsSnap = await getDocs(q)

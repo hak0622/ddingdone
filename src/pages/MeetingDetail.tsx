@@ -40,7 +40,7 @@ export default function MeetingDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { meeting, members, expenses, loading, error } = useMeeting(id)
-  const { uid, setUser } = useUserStore()
+  const { uid, tossKey, setUser } = useUserStore()
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState(false)
   const [pendingFile, setPendingFile] = useState<File | null>(null)
@@ -85,7 +85,7 @@ export default function MeetingDetail() {
       batch.update(doc(db, 'meetings', id), { memberUids: arrayUnion(uid) })
       await batch.commit()
       localStorage.setItem('ddingdone_nickname', nickname)
-      setUser(uid, nickname)
+      setUser(uid, nickname, tossKey)
       setJoinedNickname(nickname)
     } catch {
       setJoinError('참여에 실패했어요. 다시 시도해주세요.')
@@ -108,7 +108,7 @@ export default function MeetingDetail() {
       })
       await batch.commit()
       localStorage.setItem('ddingdone_nickname', nickname)
-      setUser(uid, nickname)
+      setUser(uid, nickname, tossKey)
       setJoinedNickname(nickname)
     } catch {
       setJoinError('참여에 실패했어요. 다시 시도해주세요.')
