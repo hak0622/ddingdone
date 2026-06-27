@@ -1,26 +1,7 @@
 import {
-  getAnonymousKey,
   getTossShareLink,
   share,
 } from '@apps-in-toss/web-framework'
-
-// 토스 WebView 환경 여부 확인
-export function isInsideTossApp(): boolean {
-  return typeof window !== 'undefined' && !!window.__GRANITE_NATIVE_EMITTER
-}
-
-// 사용자 고유 키 (토스 앱 내: 토스 계정 기반, 브라우저: null 반환)
-export async function getAnonymousUid(): Promise<string | null> {
-  if (!isInsideTossApp()) return null
-  try {
-    const result = await getAnonymousKey()
-    if (!result || typeof result === 'string') return null
-    if (result.type === 'HASH') return result.hash
-    return null
-  } catch {
-    return null
-  }
-}
 
 // 초대 링크 공유
 export async function shareInviteLink(meetingId: string): Promise<void> {

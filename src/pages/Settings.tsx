@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { TextField, Top } from '@toss/tds-mobile'
 import { COLORS } from '../styles/tokens'
-import { collection, doc, getDocs, query, setDoc, where, writeBatch } from 'firebase/firestore'
+import { collection, doc, getDocs, query, where, writeBatch } from 'firebase/firestore'
 import { db } from '../lib/firebase'
 import { useUserStore } from '../store/userStore'
 
@@ -44,7 +44,7 @@ function SectionLabel({ label }: { label: string }) {
 
 export default function Settings() {
   const navigate = useNavigate()
-  const { uid, nickname, tossKey, setUser } = useUserStore()
+  const { uid, nickname, setUser } = useUserStore()
   const [value, setValue] = useState(nickname)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -56,7 +56,7 @@ export default function Settings() {
     setSaving(true)
     try {
       localStorage.setItem(NICKNAME_KEY, trimmed)
-      setUser(uid, trimmed, tossKey)
+      setUser(uid, trimmed)
 
       const q = query(collection(db, 'meetings'), where('memberUids', 'array-contains', uid))
       const meetingsSnap = await getDocs(q)
@@ -65,9 +65,6 @@ export default function Settings() {
         batch.update(doc(db, 'meetings', meetingDoc.id, 'members', uid), { nickname: trimmed })
       })
       await batch.commit()
-      if (tossKey) {
-        await setDoc(doc(db, 'users', uid), { nickname: trimmed }, { merge: true })
-      }
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch {

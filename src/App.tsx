@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react'
-import { BrowserRouter, Navigate, Outlet, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom'
+import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import ErrorBoundary from './components/ErrorBoundary'
 
 import { collection, doc, getDoc, getDocs, limit, query, where } from 'firebase/firestore'
 import { db, signInAnonymously } from './lib/firebase'
-import { getAnonymousUid } from './lib/bridge'
 import { useUserStore } from './store/userStore'
 import BottomTabBar from './components/BottomTabBar'
 import Onboarding from './pages/Onboarding'
@@ -25,17 +24,14 @@ function AppInit() {
   const [ready, setReady] = useState(false)
   const [initError, setInitError] = useState(false)
   const navigate = useNavigate()
+  const location = useLocation()
   const [searchParams] = useSearchParams()
   const setUser = useUserStore((s) => s.setUser)
 
   useEffect(() => {
     async function init() {
       try {
-        const tossKey = await getAnonymousUid()
-        const firebaseUid = await signInAnonymously()
-        // tossKey: Toss 계정 기반 (IP·기기·캐시 변경에 불변)
-        // firebaseUid: 브라우저 환경 폴백 (origin에 묶임)
-        const uid = tossKey ?? firebaseUid
+        const uid = await signInAnonymously()
 
         if (!uid) {
           setInitError(true)
@@ -45,22 +41,8 @@ function AppInit() {
 
         let nickname = localStorage.getItem(NICKNAME_KEY) ?? ''
 
-        if (!nickname && tossKey) {
-          // Toss 앱 환경: /users/{uid}(=tossKey)에서 닉네임 복구
-          try {
-            const userDoc = await getDoc(doc(db, 'users', uid))
-            if (userDoc.exists()) {
-              const fetched = userDoc.data().nickname as string
-              if (fetched) {
-                nickname = fetched
-                localStorage.setItem(NICKNAME_KEY, fetched)
-              }
-            }
-          } catch { /* 조회 실패 시 계속 진행 */ }
-        }
-
         if (!nickname) {
-          // Fallback: uid로 meetings에서 닉네임 복구
+          // Fallback: localStorage가 비어있어도 내가 속한 모임의 멤버 문서에서 닉네임 복구
           try {
             const q = query(collection(db, 'meetings'), where('memberUids', 'array-contains', uid), limit(1))
             const snap = await getDocs(q)
@@ -75,7 +57,7 @@ function AppInit() {
           } catch { /* 조회 실패 시 onboarding으로 진행 */ }
         }
 
-        setUser(uid, nickname, tossKey)
+        setUser(uid, nickname)
         setReady(true)
 
         const meetingId = searchParams.get('meeting')
@@ -84,7 +66,11 @@ function AppInit() {
           return
         }
 
-        if (!nickname) {
+        // /meetings/:id로 직접 들어온 경우(초대 링크 query param 없이 URL을 바로 입력하는
+        // 경우 등)도 온보딩으로 보내지 않는다 — 그 모임의 "참여하시겠어요?" 화면에서
+        // 자연스럽게 닉네임을 받을 수 있으므로, 닉네임이 없다는 이유로 원래 가려던
+        // 모임을 잃어버리고 홈으로 빠지게 할 필요가 없다.
+        if (!nickname && !location.pathname.startsWith('/meetings/')) {
           navigate('/onboarding', { replace: true })
         }
       } catch {

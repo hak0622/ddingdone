@@ -1,25 +1,20 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { FixedBottomCTA, TextField, Top } from '@toss/tds-mobile'
-import { doc, setDoc } from 'firebase/firestore'
-import { db } from '../lib/firebase'
 import { useUserStore } from '../store/userStore'
 
 const NICKNAME_KEY = 'ddingdone_nickname'
 
 export default function Onboarding() {
   const navigate = useNavigate()
-  const { uid, tossKey, setUser } = useUserStore()
+  const { uid, setUser } = useUserStore()
   const [nickname, setNickname] = useState('')
 
   function handleStart() {
     if (nickname.trim().length === 0) return
     const trimmed = nickname.trim()
     localStorage.setItem(NICKNAME_KEY, trimmed)
-    setUser(uid, trimmed, tossKey)
-    if (tossKey) {
-      setDoc(doc(db, 'users', uid), { nickname: trimmed }, { merge: true }).catch(() => {})
-    }
+    setUser(uid, trimmed)
     navigate('/', { replace: true })
   }
 
