@@ -98,7 +98,7 @@ export default function MeetingDetail() {
   }
 
   async function joinAsNew() {
-    if (!id || !uid || !joinNickname.trim()) return
+    if (!id || !uid || !joinNickname.trim() || isSettled) return
     setJoining(true)
     setJoinError('')
     try {
@@ -400,40 +400,47 @@ export default function MeetingDetail() {
             </div>
           )}
 
-          <div>
-            <p style={{ fontSize: 13, color: '#888', margin: '0 0 8px' }}>새 닉네임으로 참여</p>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input
-                value={joinNickname}
-                onChange={(e) => setJoinNickname(e.target.value)}
-                placeholder="닉네임 입력"
-                style={{
-                  flex: 1,
-                  padding: '10px 14px',
-                  fontSize: 14,
-                  border: '1px solid #d8d8d8',
-                  borderRadius: 8,
-                  outline: 'none',
-                }}
-              />
-              <button
-                onClick={joinAsNew}
-                disabled={joining || !joinNickname.trim()}
-                style={{
-                  padding: '10px 16px',
-                  fontSize: 14,
-                  fontWeight: 600,
-                  border: 'none',
-                  borderRadius: 8,
-                  background: joinNickname.trim() ? '#000' : '#d8d8d8',
-                  color: '#fff',
-                  cursor: joinNickname.trim() ? 'pointer' : 'default',
-                }}
-              >
-                참여하기
-              </button>
+          {!isSettled && (
+            <div>
+              <p style={{ fontSize: 13, color: '#888', margin: '0 0 8px' }}>새 닉네임으로 참여</p>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  value={joinNickname}
+                  onChange={(e) => setJoinNickname(e.target.value)}
+                  placeholder="닉네임 입력"
+                  style={{
+                    flex: 1,
+                    padding: '10px 14px',
+                    fontSize: 14,
+                    border: '1px solid #d8d8d8',
+                    borderRadius: 8,
+                    outline: 'none',
+                  }}
+                />
+                <button
+                  onClick={joinAsNew}
+                  disabled={joining || !joinNickname.trim()}
+                  style={{
+                    padding: '10px 16px',
+                    fontSize: 14,
+                    fontWeight: 600,
+                    border: 'none',
+                    borderRadius: 8,
+                    background: joinNickname.trim() ? COLORS.primary : '#d8d8d8',
+                    color: '#fff',
+                    cursor: joinNickname.trim() ? 'pointer' : 'default',
+                  }}
+                >
+                  참여하기
+                </button>
+              </div>
             </div>
-          </div>
+          )}
+          {preMembers.length === 0 && isSettled && (
+            <p style={{ fontSize: 13, color: '#888', margin: 0 }}>
+              정산이 완료된 방이라 새로운 참여자를 추가할 수 없어요
+            </p>
+          )}
           {joinError && (
             <p style={{ fontSize: 13, color: '#ef4444', margin: '12px 0 0' }}>{joinError}</p>
           )}

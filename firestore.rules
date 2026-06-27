@@ -16,20 +16,32 @@ service cloud.firestore {
     }
 
     match /meetings/{meetingId} {
-      // 초대 링크로 들어온 비멤버도 "참여하기" 화면을 보려면 읽기가 필요함
-      allow read: if isAuthenticated();
+      // 초대 링크로 들어온 비멤버도 "참여하기" 화면을 보려면 ID로 단건 조회는 허용한다.
+      // 단, list(필터 없는 컬렉션 조회)까지 열어두면 누구나 meetings 전체를 덤프해서
+      // 남의 모임 이름/사진/금액을 볼 수 있게 되므로 list는 본인이 멤버인 문서만 허용한다.
+      allow get: if isAuthenticated();
+      allow list: if isAuthenticated() && request.auth.uid in resource.data.memberUids;
 
       allow create: if isAuthenticated()
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.memberUids == [request.auth.uid];
 
       // 이미 멤버: 모든 필드 수정 가능 (이름/사진/정산 상태 등)
-      // 아직 멤버가 아님: 본인을 멤버로 추가하는 참여 동작만 허용
+      // 아직 멤버가 아님: 본인을 멤버로 추가하는 참여 동작만 허용.
+      // claimPreMember(memberUids만 변경)는 정산 완료 후에도 허용하지만,
+      // joinAsNew(memberUids+memberCount 변경, 인원수가 늘어남)는 이미 정산이 끝난
+      // 방의 1인당 금액이 사후에 바뀌어버리므로 정산 완료 후엔 막는다.
       allow update: if isAuthenticated() && (
         request.auth.uid in resource.data.memberUids ||
         (
           request.auth.uid in request.resource.data.memberUids &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids', 'memberCount'])
+          (
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids']) ||
+            (
+              resource.data.status != 'settled' &&
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids', 'memberCount'])
+            )
+          )
         )
       );
 
