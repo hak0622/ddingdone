@@ -9,6 +9,7 @@ export interface Meeting {
   memo: string
   createdBy: string
   photoUrl: string | null
+  photoPublicId: string | null
   status: 'active' | 'settled'
 }
 
@@ -57,6 +58,7 @@ export function useMeeting(meetingId: string | undefined) {
             memo: data.memo,
             createdBy: data.createdBy,
             photoUrl: data.photoUrl ?? null,
+            photoPublicId: data.photoPublicId ?? null,
             status: data.status ?? 'active',
           })
         } else {

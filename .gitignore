@@ -4,3 +4,5 @@ dist
 .DS_Store
 *.ait
 phases/**/step*-output.json
+.wrangler
+.dev.vars

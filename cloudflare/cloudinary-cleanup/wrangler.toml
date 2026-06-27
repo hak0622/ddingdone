@@ -1,0 +1,6 @@
+name = "ddingdone-cloudinary-cleanup"
+main = "src/index.ts"
+compatibility_date = "2025-06-01"
+
+[vars]
+CLOUDINARY_CLOUD_NAME = "dich54vn5"
