@@ -7,7 +7,6 @@ import { db } from '../lib/firebase'
 import { useUserStore } from '../store/userStore'
 
 const NICKNAME_KEY = 'ddingdone_nickname'
-const APP_VERSION = '0.1.0'
 
 function Row({ label, onPress }: { label: string; onPress: () => void }) {
   return (
@@ -30,22 +29,6 @@ function Row({ label, onPress }: { label: string; onPress: () => void }) {
         <path d="M9 5l7 7-7 7" stroke="#c0c0c0" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     </button>
-  )
-}
-
-function InfoRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '16px 0',
-      }}
-    >
-      <span style={{ fontSize: 15, color: '#191919' }}>{label}</span>
-      <span style={{ fontSize: 14, color: '#888' }}>{value}</span>
-    </div>
   )
 }
 
@@ -150,8 +133,6 @@ export default function Settings() {
           <Row label="이용약관" onPress={() => navigate('/terms')} />
           <Divider />
           <Row label="개인정보처리방침" onPress={() => navigate('/privacy')} />
-          <Divider />
-          <InfoRow label="앱 버전" value={APP_VERSION} />
         </div>
 
       </div>
