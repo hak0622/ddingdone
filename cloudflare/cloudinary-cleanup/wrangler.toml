@@ -4,3 +4,5 @@ compatibility_date = "2025-06-01"
 
 [vars]
 CLOUDINARY_CLOUD_NAME = "dich54vn5"
+FIREBASE_API_KEY = "AIzaSyAiXgUn2fwqsE8tTwiz-EW_-2fK23QGcX8"
+FIREBASE_PROJECT_ID = "ddingdone"

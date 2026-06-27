@@ -23,3 +23,7 @@ export async function signInAnonymously(): Promise<string> {
   const credential = await firebaseSignInAnonymously(auth)
   return credential.user.uid
 }
+
+export async function getIdToken(): Promise<string | null> {
+  return auth.currentUser?.getIdToken() ?? null
+}
