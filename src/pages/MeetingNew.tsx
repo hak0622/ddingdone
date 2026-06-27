@@ -4,6 +4,7 @@ import { Asset, TextField, Top } from '@toss/tds-mobile'
 import DatePicker from '../components/DatePicker'
 import { collection, doc, serverTimestamp, writeBatch } from 'firebase/firestore'
 import { db } from '../lib/firebase'
+import { generatePreMemberId } from '../lib/meetingMembers'
 import { useUserStore } from '../store/userStore'
 import ResultScreen from '../components/ResultScreen'
 
@@ -32,6 +33,7 @@ async function createMeeting(
     createdBy: uid,
     createdAt: serverTimestamp(),
     photoUrl: null,
+    photoPublicId: null,
     status: 'active',
     memberUids: [uid],
     memberCount: 1 + names.length,
@@ -42,8 +44,7 @@ async function createMeeting(
   batch.set(doc(db, 'meetings', meetingRef.id, 'members', uid), { nickname })
 
   for (const name of names) {
-    const preId = `pre_${Math.random().toString(36).slice(2, 9)}`
-    batch.set(doc(db, 'meetings', meetingRef.id, 'members', preId), { nickname: name })
+    batch.set(doc(db, 'meetings', meetingRef.id, 'members', generatePreMemberId()), { nickname: name })
   }
 
   await batch.commit()

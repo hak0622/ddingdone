@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Asset, BottomSheet, ConfirmDialog, FixedBottomCTA, List, ListRow, Top, useBottomSheet } from '@toss/tds-mobile'
 import { doc, updateDoc, writeBatch, increment, arrayUnion } from 'firebase/firestore'
-import { formatKRW } from '../utils/format'
+import { formatKRW, truncateName } from '../utils/format'
 import { COLORS } from '../styles/tokens'
 import { db } from '../lib/firebase'
-import { uploadImage } from '../lib/cloudinary'
+import { uploadImage, deleteImage } from '../lib/cloudinary'
 import { shareInviteLink } from '../lib/bridge'
+import { deletePreMember } from '../lib/meetingMembers'
 import { useMeeting } from '../hooks/useMeeting'
 import { useUserStore } from '../store/userStore'
 import ResultScreen from '../components/ResultScreen'
@@ -35,6 +36,7 @@ function CameraIcon({ color = '#aaa' }: { color?: string }) {
 }
 
 const OVERLAY_GRADIENT = 'linear-gradient(to bottom, transparent 25%, rgba(0,0,0,0.72) 100%)'
+const MEMBER_CHIP_LIMIT = 3
 
 export default function MeetingDetail() {
   const { id } = useParams<{ id: string }>()
@@ -56,6 +58,7 @@ export default function MeetingDetail() {
   const [actionError, setActionError] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { open: openManageSheet, close: closeManageSheet } = useBottomSheet()
+  const { open: openMembersSheet, close: closeMembersSheet } = useBottomSheet()
   const isSettled = meeting?.status === 'settled'
 
   useEffect(() => {
@@ -136,11 +139,15 @@ export default function MeetingDetail() {
     if (!pendingFile || !id) return
     setUploading(true)
     try {
-      const url = await uploadImage(pendingFile)
-      await updateDoc(doc(db, 'meetings', id), { photoUrl: url })
+      const previousPublicId = meeting?.photoPublicId ?? null
+      const { url, publicId } = await uploadImage(pendingFile)
+      await updateDoc(doc(db, 'meetings', id), { photoUrl: url, photoPublicId: publicId })
       if (pendingPreview) URL.revokeObjectURL(pendingPreview)
       setPendingFile(null)
       setPendingPreview(null)
+      if (previousPublicId && previousPublicId !== publicId) {
+        deleteImage(previousPublicId).catch((err) => console.error('이전 사진 삭제 실패', err))
+      }
     } catch (err) {
       console.error('사진 업로드 실패', err)
       setUploadError(true)
@@ -178,6 +185,9 @@ export default function MeetingDetail() {
       })
       batch.delete(doc(db, 'meetings', id))
       await batch.commit()
+      if (meeting?.photoPublicId) {
+        deleteImage(meeting.photoPublicId).catch((err) => console.error('모임 사진 삭제 실패', err))
+      }
       navigate('/')
     } catch {
       showActionError('삭제하지 못했어요. 다시 시도해주세요.')
@@ -248,18 +258,8 @@ export default function MeetingDetail() {
 
   async function handleDeletePreMember(preUid: string) {
     if (!id) return
-    const preMemberExpenses = expenses.filter((e) => e.paidBy === preUid)
-    const totalToRemove = preMemberExpenses.reduce((sum, e) => sum + e.amount, 0)
-    const batch = writeBatch(db)
-    preMemberExpenses.forEach((e) => batch.delete(doc(db, 'meetings', id, 'expenses', e.id)))
-    batch.delete(doc(db, 'meetings', id, 'members', preUid))
-    batch.update(doc(db, 'meetings', id), {
-      memberCount: increment(-1),
-      totalAmount: increment(-totalToRemove),
-      expenseCount: increment(-preMemberExpenses.length),
-    })
     try {
-      await batch.commit()
+      await deletePreMember(id, preUid)
     } catch {
       showActionError('멤버를 삭제하지 못했어요. 다시 시도해주세요.')
     }
@@ -443,11 +443,61 @@ export default function MeetingDetail() {
   }
 
   const memberEntries = Object.entries(members)
+  const visibleMemberEntries = memberEntries.slice(0, MEMBER_CHIP_LIMIT)
+  const hasMoreMembers = memberEntries.length > MEMBER_CHIP_LIMIT
   const totalAmount = expenses.reduce((sum, e) => sum + e.amount, 0)
   const perPerson = memberEntries.length > 0 ? Math.floor(totalAmount / memberEntries.length) : 0
 
   const myPaid = expenses.filter((e) => e.paidBy === uid).reduce((s, e) => s + e.amount, 0)
   const myBalance = myPaid - perPerson
+
+  function openAllMembers() {
+    openMembersSheet({
+      header: <BottomSheet.Header>참여자 {memberEntries.length}명</BottomSheet.Header>,
+      onDimmerClick: closeMembersSheet,
+      children: (
+        <div style={{ padding: '0 20px 24px', maxHeight: '60vh', overflowY: 'auto' }}>
+          {memberEntries.map(([memberUid, name]) => {
+            const canDeleteMember = !isSettled && uid === meeting.createdBy && memberUid.startsWith('pre_')
+            return (
+              <div
+                key={memberUid}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '12px 0',
+                  borderBottom: '1px solid #f0f0f0',
+                }}
+              >
+                <span style={{ fontSize: 15, color: '#191919' }}>
+                  {memberUid === uid ? `${name}(나)` : name}
+                </span>
+                {canDeleteMember && (
+                  <button
+                    onClick={() => setDeletePreMemberTarget(memberUid)}
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: 20,
+                      border: 'none',
+                      cursor: 'pointer',
+                      fontSize: 12,
+                      fontWeight: 600,
+                      background: '#FFEBEB',
+                      color: '#ef4444',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    삭제
+                  </button>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      ),
+    })
+  }
 
   return (
     <>
@@ -611,53 +661,62 @@ export default function MeetingDetail() {
             padding: '14px 0 16px',
           }}
         >
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', flex: 1 }}>
-            {memberEntries.map(([memberUid, name]) => {
-              const canDeleteMember = !isSettled && uid === meeting.createdBy && memberUid.startsWith('pre_')
+          <button
+            type="button"
+            onClick={openAllMembers}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              minWidth: 0,
+              flex: 1,
+              border: 'none',
+              background: 'none',
+              padding: 0,
+              margin: 0,
+              textAlign: 'left',
+              cursor: 'pointer',
+              overflow: 'hidden',
+            }}
+          >
+            {visibleMemberEntries.map(([memberUid, name]) => {
+              const displayName = truncateName(name)
+              const label = memberUid === uid ? `나(${displayName})` : displayName
               return (
                 <span
                   key={memberUid}
                   style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    padding: canDeleteMember ? '4px 6px 4px 10px' : '4px 10px',
+                    padding: '4px 10px',
                     fontSize: 13,
                     border: '1px solid #e8e8e8',
                     borderRadius: 20,
                     background: '#f5f5f5',
                     color: '#333',
+                    whiteSpace: 'nowrap',
+                    flexShrink: 0,
                   }}
                 >
-                  {memberUid === uid ? `${name}(나)` : name}
-                  {canDeleteMember && (
-                    <button
-                      onClick={() => setDeletePreMemberTarget(memberUid)}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        width: 16,
-                        height: 16,
-                        borderRadius: '50%',
-                        border: 'none',
-                        background: '#ccc',
-                        color: '#fff',
-                        fontSize: 10,
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                        lineHeight: 1,
-                        padding: 0,
-                        flexShrink: 0,
-                      }}
-                    >
-                      ✕
-                    </button>
-                  )}
+                  {label}
                 </span>
               )
             })}
-          </div>
+            {hasMoreMembers && (
+              <span
+                style={{
+                  padding: '4px 10px',
+                  fontSize: 13,
+                  border: '1px solid #e8e8e8',
+                  borderRadius: 20,
+                  background: '#f5f5f5',
+                  color: '#333',
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0,
+                }}
+              >
+                외 {memberEntries.length - MEMBER_CHIP_LIMIT}명
+              </span>
+            )}
+          </button>
           {!isSettled && (
             <button
               onClick={handleShare}
