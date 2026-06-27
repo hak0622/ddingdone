@@ -1,13 +1,4 @@
 {
   "appName": "ddingdone",
-  "permissions": [
-    {
-      "name": "photos",
-      "access": "read"
-    },
-    {
-      "name": "clipboard",
-      "access": "read"
-    }
-  ]
+  "permissions": []
 }

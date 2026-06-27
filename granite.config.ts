@@ -14,7 +14,7 @@ export default defineConfig({
   brand: {
     displayName: "띵돈",
     primaryColor: "#3182F6",
-    icon: "",
+    icon: "https://static.toss.im/appsintoss/49539/06896274-c682-4aa7-9a96-dbb1e66c8b20.png",
   },
   web: {
     host: getHostIp(),
@@ -24,9 +24,6 @@ export default defineConfig({
       build: "vite build",
     },
   },
-  permissions: [
-    { name: "photos", access: "read" },
-    { name: "clipboard", access: "read" },
-  ],
+  permissions: [],
   outdir: "dist",
 });
