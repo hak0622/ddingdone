@@ -8,7 +8,7 @@ import { COLORS } from '../styles/tokens'
 import { useMeeting } from '../hooks/useMeeting'
 import { calculateSettlements, type Settlement } from '../utils/settle'
 import { useUserStore } from '../store/userStore'
-import { openExternalUrl, shareText } from '../lib/bridge'
+import { shareText } from '../lib/bridge'
 import ResultScreen from '../components/ResultScreen'
 
 export default function Settle() {
@@ -34,11 +34,6 @@ export default function Settle() {
   const myPayments = settlements.filter((s) => s.from === uid)
   const myReceivables = settlements.filter((s) => s.to === uid)
   const isSettled = meeting?.status === 'settled'
-
-  function handleSendToToss(s: Settlement) {
-    const url = `supertoss://send?amount=${s.amount}&bank=토스&accountNo=&origin=정산&message=${encodeURIComponent(`${s.fromName}→${s.toName} 정산`)}`
-    openExternalUrl(url)
-  }
 
   async function handleShare() {
     if (!meeting) return
@@ -205,26 +200,9 @@ export default function Settle() {
                   }}
                 >
                   <span style={{ fontSize: 15, color: '#191919' }}>나 → {s.toName}</span>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 15, fontWeight: 600, color: COLORS.error }}>
-                      {formatKRW(s.amount)}
-                    </span>
-                    <button
-                      onClick={() => handleSendToToss(s)}
-                      style={{
-                        padding: '6px 12px',
-                        fontSize: 12,
-                        fontWeight: 600,
-                        border: 'none',
-                        borderRadius: 6,
-                        background: '#3182F6',
-                        color: '#fff',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      토스 송금
-                    </button>
-                  </div>
+                  <span style={{ fontSize: 15, fontWeight: 600, color: COLORS.error }}>
+                    {formatKRW(s.amount)}
+                  </span>
                 </div>
               ))}
             </div>
