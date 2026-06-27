@@ -15,10 +15,14 @@ service cloud.firestore {
         (existsAfter(path) && request.auth.uid in getAfter(path).data.memberUids);
     }
 
+    function isSettled(meetingId) {
+      let path = /databases/$(database)/documents/meetings/$(meetingId);
+      return exists(path) && get(path).data.status == 'settled';
+    }
+
     match /meetings/{meetingId} {
       // 초대 링크로 들어온 비멤버도 "참여하기" 화면을 보려면 ID로 단건 조회는 허용한다.
-      // 단, list(필터 없는 컬렉션 조회)까지 열어두면 누구나 meetings 전체를 덤프해서
-      // 남의 모임 이름/사진/금액을 볼 수 있게 되므로 list는 본인이 멤버인 문서만 허용한다.
+      // list(필터 없는 컬렉션 조회)는 본인이 멤버인 문서만 허용해 전체 덤프를 막는다.
       allow get: if isAuthenticated();
       allow list: if isAuthenticated() && request.auth.uid in resource.data.memberUids;
 
@@ -27,20 +31,21 @@ service cloud.firestore {
         && request.resource.data.memberUids == [request.auth.uid];
 
       // 이미 멤버: 모든 필드 수정 가능 (이름/사진/정산 상태 등)
-      // 아직 멤버가 아님: 본인을 멤버로 추가하는 참여 동작만 허용.
+      // 아직 멤버가 아님: 본인을 멤버로 추가하는 참여 동작(memberUids/memberCount 외
+      // 다른 필드는 못 건드림)만 허용.
       // claimPreMember(memberUids만 변경)는 정산 완료 후에도 허용하지만,
       // joinAsNew(memberUids+memberCount 변경, 인원수가 늘어남)는 이미 정산이 끝난
       // 방의 1인당 금액이 사후에 바뀌어버리므로 정산 완료 후엔 막는다.
+      // hasOnly는 부분집합 검사라 memberUids만 바뀌어도 true가 되므로, memberCount가
+      // "실제로 바뀌었는지"는 hasAny로 따로 검사한다.
       allow update: if isAuthenticated() && (
         request.auth.uid in resource.data.memberUids ||
         (
           request.auth.uid in request.resource.data.memberUids &&
-          (
-            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids']) ||
-            (
-              resource.data.status != 'settled' &&
-              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids', 'memberCount'])
-            )
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids', 'memberCount']) &&
+          !(
+            resource.data.status == 'settled' &&
+            request.resource.data.diff(resource.data).affectedKeys().hasAny(['memberCount'])
           )
         )
       );
@@ -50,15 +55,26 @@ service cloud.firestore {
 
       match /members/{memberId} {
         allow read: if isAuthenticated();
-        // 본인 멤버 문서 생성/수정 + 모임 생성 시 아직 가입 안 한 친구를 위한 pre_ placeholder 생성 허용
-        allow create, update: if isAuthenticated() && (
-          memberId == request.auth.uid ||
-          memberId.matches('pre_.*')
+        // 본인 멤버 문서는 실제로 memberUids에도 들어가 있을 때만 생성/수정 가능.
+        // 이 조건이 없으면 memberUids 갱신 없이 members 문서만 따로 만들어
+        // "가짜 멤버"를 끼워넣어 1인당 정산 금액(perPerson)을 조작할 수 있다 —
+        // perPerson은 memberUids가 아니라 members 서브컬렉션 문서 수로 계산되기 때문.
+        // pre_ placeholder도 반드시 isMember를 요구한다 — 이게 없으면 모임 ID만 아는
+        // 전혀 무관한 사람도(초대 링크로 ID는 쉽게 새어나간다) 가짜 placeholder를
+        // 끼워넣어 같은 방식으로 정산 금액을 조작할 수 있다. claimPreMember/joinAsNew는
+        // 멤버 추가와 같은 배치이므로 isMember의 getAfter 분기로 정상 통과한다.
+        allow create, update: if isAuthenticated() && isMember(meetingId) && (
+          memberId == request.auth.uid || memberId.matches('pre_.*')
         );
-        // 본인 문서 삭제, 아직 참여 안 한 pre_ placeholder 삭제, 모임 생성자의 전체 삭제만 허용
+        // 본인 문서 삭제, 멤버의 pre_ placeholder 삭제, 모임 생성자의 전체 삭제만
+        // 허용한다. 이미 활동 중인 실제 멤버 문서는 본인이나 생성자가 아니면 그
+        // 누구도(claim 명목으로도) 지울 수 없다 — 그걸 허용하면 전혀 모르는 사람이
+        // 남의 자리를 가져갈 수 있게 되기 때문이다. pre_ 삭제도 isMember를 요구해
+        // 무관한 사람이 남의 placeholder를 지우지 못하게 막는다 — claimPreMember로
+        // 막 합류하는 사람은 같은 배치의 getAfter 분기로 isMember가 통과된다.
         allow delete: if isAuthenticated() && (
           memberId == request.auth.uid ||
-          memberId.matches('pre_.*') ||
+          (memberId.matches('pre_.*') && isMember(meetingId)) ||
           get(/databases/$(database)/documents/meetings/$(meetingId)).data.createdBy == request.auth.uid
         );
       }
@@ -66,12 +82,24 @@ service cloud.firestore {
       match /expenses/{expenseId} {
         // 비멤버도 참여 전 화면에서 읽기를 시도할 수 있어 읽기는 열어두고, 쓰기만 멤버로 제한
         allow read: if isAuthenticated();
-        allow write: if isAuthenticated() && isMember(meetingId);
-      }
-    }
 
-    match /users/{userId} {
-      allow read, write: if isAuthenticated() && userId == request.auth.uid;
+        // 정산 완료된 방은 금액이 사후에 바뀌면 안 되므로 새 지출 추가는 막는다.
+        allow create: if isAuthenticated() && isMember(meetingId) && !isSettled(meetingId);
+
+        // 일반 수정(금액/카테고리 등)은 정산 전에만 허용하지만, claimPreMember가 기존
+        // 지출의 paidBy만 새 uid로 옮기는 작업은 정산 후에도 허용해야 한다(금액 불변).
+        allow update: if isAuthenticated() && isMember(meetingId) && (
+          !isSettled(meetingId) ||
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['paidBy'])
+        );
+
+        // 일반 삭제는 정산 전에만 허용하지만, 모임 전체 삭제(handleDeleteMeeting)에
+        // 같이 묶여 지출도 지워지는 경우는 모임 문서 자체가 이 배치 후 사라지므로 예외로 허용한다.
+        allow delete: if isAuthenticated() && isMember(meetingId) && (
+          !isSettled(meetingId) ||
+          !existsAfter(/databases/$(database)/documents/meetings/$(meetingId))
+        );
+      }
     }
   }
 }

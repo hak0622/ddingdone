@@ -197,24 +197,30 @@ export default function ExpenseInput() {
             <p style={{ fontSize: 14, color: '#8b8b8b' }}>불러오는 중...</p>
           ) : (
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {Object.entries(members).map(([memberUid, name]) => (
-                <button
-                  key={memberUid}
-                  onClick={() => setPaidBy(memberUid)}
-                  style={{
-                    padding: '10px 22px',
-                    borderRadius: 24,
-                    border: 'none',
-                    cursor: 'pointer',
-                    fontSize: 15,
-                    fontWeight: 600,
-                    background: paidBy === memberUid ? '#3182F6' : '#f5f5f5',
-                    color: paidBy === memberUid ? '#fff' : '#555',
-                  }}
-                >
-                  {uid === memberUid ? '나' : name}
-                </button>
-              ))}
+              {Object.entries(members)
+                .sort(([a], [b]) => {
+                  if (a === uid) return -1
+                  if (b === uid) return 1
+                  return 0
+                })
+                .map(([memberUid, name]) => (
+                  <button
+                    key={memberUid}
+                    onClick={() => setPaidBy(memberUid)}
+                    style={{
+                      padding: '10px 22px',
+                      borderRadius: 24,
+                      border: 'none',
+                      cursor: 'pointer',
+                      fontSize: 15,
+                      fontWeight: 600,
+                      background: paidBy === memberUid ? '#3182F6' : '#f5f5f5',
+                      color: paidBy === memberUid ? '#fff' : '#555',
+                    }}
+                  >
+                    {uid === memberUid ? '나' : name}
+                  </button>
+                ))}
             </div>
           )}
         </div>

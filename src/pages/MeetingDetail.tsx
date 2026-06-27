@@ -42,7 +42,7 @@ export default function MeetingDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { meeting, members, expenses, loading, error } = useMeeting(id)
-  const { uid, tossKey, setUser } = useUserStore()
+  const { uid, setUser } = useUserStore()
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState(false)
   const [pendingFile, setPendingFile] = useState<File | null>(null)
@@ -74,6 +74,10 @@ export default function MeetingDetail() {
     }
   }
 
+  // 아직 한 번도 안 들어온 placeholder(pre_) 자리만 claim 가능하다. 이미 활동 중인
+  // 실제 멤버까지 claim 대상에 포함시키면, 전혀 모르는 사람이 뱃지를 눌러서 그
+  // 사람의 자리를 빼앗아버릴 수 있어 — 본인 확인 수단이 없는 이 앱 구조에서는
+  // "자기 자리 복구"와 "남의 자리 탈취"를 구분할 방법이 없기 때문에 위험하다.
   async function claimPreMember(preUid: string, nickname: string) {
     if (!id || !uid) return
     setJoining(true)
@@ -88,7 +92,7 @@ export default function MeetingDetail() {
       batch.update(doc(db, 'meetings', id), { memberUids: arrayUnion(uid) })
       await batch.commit()
       localStorage.setItem('ddingdone_nickname', nickname)
-      setUser(uid, nickname, tossKey)
+      setUser(uid, nickname)
       setJoinedNickname(nickname)
     } catch {
       setJoinError('참여에 실패했어요. 다시 시도해주세요.')
@@ -111,7 +115,7 @@ export default function MeetingDetail() {
       })
       await batch.commit()
       localStorage.setItem('ddingdone_nickname', nickname)
-      setUser(uid, nickname, tossKey)
+      setUser(uid, nickname)
       setJoinedNickname(nickname)
     } catch {
       setJoinError('참여에 실패했어요. 다시 시도해주세요.')
@@ -140,13 +144,13 @@ export default function MeetingDetail() {
     setUploading(true)
     try {
       const previousPublicId = meeting?.photoPublicId ?? null
-      const { url, publicId } = await uploadImage(pendingFile)
+      const { url, publicId } = await uploadImage(pendingFile, id)
       await updateDoc(doc(db, 'meetings', id), { photoUrl: url, photoPublicId: publicId })
       if (pendingPreview) URL.revokeObjectURL(pendingPreview)
       setPendingFile(null)
       setPendingPreview(null)
       if (previousPublicId && previousPublicId !== publicId) {
-        deleteImage(previousPublicId).catch((err) => console.error('이전 사진 삭제 실패', err))
+        deleteImage(previousPublicId, id).catch((err) => console.error('이전 사진 삭제 실패', err))
       }
     } catch (err) {
       console.error('사진 업로드 실패', err)
@@ -176,6 +180,12 @@ export default function MeetingDetail() {
     if (!id || deletingMeeting) return
     setDeletingMeeting(true)
     try {
+      // 사진 삭제는 모임 문서가 아직 살아있을 때 해야 한다 — Worker가 멤버인지
+      // 확인하려면 meetings/{id} 문서를 조회해야 하는데, 문서를 먼저 지워버리면
+      // 정당한 요청인데도 "모임을 찾을 수 없음"으로 거부된다.
+      if (meeting?.photoPublicId) {
+        await deleteImage(meeting.photoPublicId, id).catch((err) => console.error('모임 사진 삭제 실패', err))
+      }
       const batch = writeBatch(db)
       Object.keys(members).forEach((memberUid) => {
         batch.delete(doc(db, 'meetings', id, 'members', memberUid))
@@ -185,9 +195,6 @@ export default function MeetingDetail() {
       })
       batch.delete(doc(db, 'meetings', id))
       await batch.commit()
-      if (meeting?.photoPublicId) {
-        deleteImage(meeting.photoPublicId).catch((err) => console.error('모임 사진 삭제 실패', err))
-      }
       navigate('/')
     } catch {
       showActionError('삭제하지 못했어요. 다시 시도해주세요.')
@@ -352,6 +359,8 @@ export default function MeetingDetail() {
   }
 
   const isNotMember = !loading && !!uid && !members[uid]
+  // 아직 한 번도 안 들어온 pre_ placeholder만 claim 대상으로 보여준다. 이미 활동
+  // 중인 실제 멤버까지 노출하면, 전혀 모르는 사람이 그 자리를 눌러서 가져갈 수 있다.
   const preMembers = Object.entries(members).filter(([memberUid]) => memberUid.startsWith('pre_'))
 
   if (joinedNickname) {
@@ -436,9 +445,11 @@ export default function MeetingDetail() {
               </div>
             </div>
           )}
-          {preMembers.length === 0 && isSettled && (
+          {isSettled && (
             <p style={{ fontSize: 13, color: '#888', margin: 0 }}>
-              정산이 완료된 방이라 새로운 참여자를 추가할 수 없어요
+              {preMembers.length > 0
+                ? '정산이 완료된 방이라 새로운 참여자는 추가할 수 없어요. 기존 참여자 중 본인이 있다면 위에서 선택해주세요.'
+                : '정산이 완료된 방이라 더 이상 참여할 수 없어요.'}
             </p>
           )}
           {joinError && (
@@ -449,7 +460,13 @@ export default function MeetingDetail() {
     )
   }
 
-  const memberEntries = Object.entries(members)
+  // Firestore 구독 결과의 순서는 보장되지 않아 새 멤버가 들어올 때마다 순서가
+  // 흔들릴 수 있다. "나"는 항상 맨 앞에 고정한다.
+  const memberEntries = Object.entries(members).sort(([a], [b]) => {
+    if (a === uid) return -1
+    if (b === uid) return 1
+    return 0
+  })
   const visibleMemberEntries = memberEntries.slice(0, MEMBER_CHIP_LIMIT)
   const hasMoreMembers = memberEntries.length > MEMBER_CHIP_LIMIT
   const totalAmount = expenses.reduce((sum, e) => sum + e.amount, 0)

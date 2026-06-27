@@ -74,7 +74,10 @@ export default function MeetingNew() {
       setMemberInput('')
       return
     }
-    if (members.includes(trimmed)) {
+    // '나'(내 닉네임)는 이미 자동으로 포함되므로 같은 이름을 또 추가하면 막아야 한다.
+    // 막지 않으면 createMeeting()에서 조용히 걸러지기만 해서, 사용자는 추가했다고
+    // 생각한 참여자가 아무 안내 없이 사라지는 것처럼 보인다.
+    if (members.includes(trimmed) || trimmed === nickname) {
       setMemberError(true)
       return
     }

@@ -160,7 +160,13 @@ export default function MeetingEdit() {
   }
 
   const isDateValid = /^\d{4}\.\d{2}\.\d{2}$/.test(date)
-  const memberEntries = Object.entries(members)
+  // Firestore 구독 결과의 순서는 보장되지 않아 새 멤버가 들어올 때마다 순서가
+  // 흔들릴 수 있다. "나"는 항상 맨 앞에 고정한다.
+  const memberEntries = Object.entries(members).sort(([a], [b]) => {
+    if (a === uid) return -1
+    if (b === uid) return 1
+    return 0
+  })
   const visibleMemberEntries = membersExpanded ? memberEntries : memberEntries.slice(0, MEMBER_CHIP_LIMIT)
   const hiddenMemberCount = memberEntries.length - MEMBER_CHIP_LIMIT
 
