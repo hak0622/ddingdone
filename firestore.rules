@@ -6,23 +6,60 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // get()은 배치 적용 "전" 상태만 보고, getAfter()는 "후" 상태를 본다.
+    // claimPreMember처럼 멤버 추가와 지출 내역 수정이 같은 배치로 동시에 일어나는
+    // 경우를 위해 둘 중 하나라도 충족하면 멤버로 인정한다.
+    function isMember(meetingId) {
+      let path = /databases/$(database)/documents/meetings/$(meetingId);
+      return (exists(path) && request.auth.uid in get(path).data.memberUids) ||
+        (existsAfter(path) && request.auth.uid in getAfter(path).data.memberUids);
+    }
+
     match /meetings/{meetingId} {
+      // 초대 링크로 들어온 비멤버도 "참여하기" 화면을 보려면 읽기가 필요함
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated();
-      allow delete: if isAuthenticated();
+
+      allow create: if isAuthenticated()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.memberUids == [request.auth.uid];
+
+      // 이미 멤버: 모든 필드 수정 가능 (이름/사진/정산 상태 등)
+      // 아직 멤버가 아님: 본인을 멤버로 추가하는 참여 동작만 허용
+      allow update: if isAuthenticated() && (
+        request.auth.uid in resource.data.memberUids ||
+        (
+          request.auth.uid in request.resource.data.memberUids &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids', 'memberCount'])
+        )
+      );
+
+      // 모임 생성자만 통째로 삭제 가능
+      allow delete: if isAuthenticated() && resource.data.createdBy == request.auth.uid;
 
       match /members/{memberId} {
-        allow read, write: if isAuthenticated();
+        allow read: if isAuthenticated();
+        // 본인 멤버 문서 생성/수정 + 모임 생성 시 아직 가입 안 한 친구를 위한 pre_ placeholder 생성 허용
+        allow create, update: if isAuthenticated() && (
+          memberId == request.auth.uid ||
+          memberId.matches('pre_.*')
+        );
+        // 본인 문서 삭제, 아직 참여 안 한 pre_ placeholder 삭제, 모임 생성자의 전체 삭제만 허용
+        allow delete: if isAuthenticated() && (
+          memberId == request.auth.uid ||
+          memberId.matches('pre_.*') ||
+          get(/databases/$(database)/documents/meetings/$(meetingId)).data.createdBy == request.auth.uid
+        );
       }
 
       match /expenses/{expenseId} {
-        allow read, write: if isAuthenticated();
+        // 비멤버도 참여 전 화면에서 읽기를 시도할 수 있어 읽기는 열어두고, 쓰기만 멤버로 제한
+        allow read: if isAuthenticated();
+        allow write: if isAuthenticated() && isMember(meetingId);
       }
     }
 
     match /users/{userId} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if isAuthenticated() && userId == request.auth.uid;
     }
   }
 }
