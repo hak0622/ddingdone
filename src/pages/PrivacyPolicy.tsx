@@ -23,7 +23,7 @@ const SECTIONS = [
   },
   {
     title: '부칙',
-    body: '이 방침은 2026년 6월 16일부터 적용됩니다.',
+    body: '이 방침은 2026년 6월 28일부터 적용됩니다.',
   },
 ]
 
@@ -32,7 +32,7 @@ export default function PrivacyPolicy() {
     <>
       <Top title={<Top.TitleParagraph size={22}>개인정보처리방침</Top.TitleParagraph>} />
       <div style={{ padding: '20px 20px 48px' }}>
-        <p style={{ fontSize: 13, color: '#888', margin: '0 0 24px' }}>최종 업데이트: 2026년 6월 16일</p>
+        <p style={{ fontSize: 13, color: '#888', margin: '0 0 24px' }}>최종 업데이트: 2026년 6월 28일</p>
         {SECTIONS.map((s) => (
           <div key={s.title} style={{ marginBottom: 24 }}>
             <p style={{ fontSize: 15, fontWeight: 700, color: '#191919', margin: '0 0 8px' }}>{s.title}</p>
