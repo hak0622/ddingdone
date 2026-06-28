@@ -6,6 +6,26 @@ interface Env {
   FIREBASE_PROJECT_ID: string
 }
 
+// 사진 삭제 후 모임 폴더가 비었으면 폴더도 같이 지운다. Cloudinary는 폴더가
+// 비어있지 않으면(예: 사진 교체로 새 사진이 이미 같은 폴더에 올라간 경우)
+// 이 호출을 거부하므로, 실패해도 무시하고 넘어간다 — 핵심 동작인 사진 삭제는
+// 이미 끝났으니 폴더 정리는 best-effort로 충분하다.
+async function deleteFolderIfEmpty(
+  cloudName: string,
+  apiKey: string,
+  apiSecret: string,
+  folderPath: string,
+): Promise<void> {
+  try {
+    await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/folders/${folderPath}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Basic ${btoa(`${apiKey}:${apiSecret}`)}` },
+    })
+  } catch {
+    // best-effort
+  }
+}
+
 async function sha1Hex(input: string): Promise<string> {
   const data = new TextEncoder().encode(input)
   const hashBuffer = await crypto.subtle.digest('SHA-1', data)
@@ -166,6 +186,8 @@ export default {
         headers: { ...cors, 'Content-Type': 'application/json' },
       })
     }
+
+    await deleteFolderIfEmpty(env.CLOUDINARY_CLOUD_NAME, env.CLOUDINARY_API_KEY, env.CLOUDINARY_API_SECRET, `ddingdone/${meetingId}`)
 
     return new Response(JSON.stringify({ success: true }), {
       headers: { ...cors, 'Content-Type': 'application/json' },
