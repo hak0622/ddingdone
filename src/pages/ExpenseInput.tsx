@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Top } from '@toss/tds-mobile'
 import { collection, getDoc, doc, serverTimestamp, increment, writeBatch } from 'firebase/firestore'
 import { db } from '../lib/firebase'
-import { useMeetingMembers } from '../hooks/useMeeting'
+import { useMeeting } from '../hooks/useMeeting'
 import { useUserStore } from '../store/userStore'
 
 const CATEGORIES = [
@@ -20,7 +20,9 @@ export default function ExpenseInput() {
   const [searchParams] = useSearchParams()
   const editId = searchParams.get('editId')
   const { uid } = useUserStore()
-  const { members, loading } = useMeetingMembers(meetingId)
+  // 정산 완료 여부는 같은 모임을 보고 있는 다른 화면(상세 등)과 공유되는
+  // 구독에서 그대로 가져온다 — 화면마다 따로 getDoc을 또 호출할 필요가 없다.
+  const { meeting, members, loading } = useMeeting(meetingId)
 
   const [amount, setAmount] = useState('')
   const [category, setCategory] = useState('')
@@ -32,11 +34,8 @@ export default function ExpenseInput() {
   const [editLoaded, setEditLoaded] = useState(!editId)
 
   useEffect(() => {
-    if (!meetingId) return
-    getDoc(doc(db, 'meetings', meetingId)).then((snap) => {
-      if (snap.exists() && snap.data().status === 'settled') navigate(-1)
-    })
-  }, [meetingId])
+    if (!loading && meeting?.status === 'settled') navigate(-1)
+  }, [loading, meeting])
 
   useEffect(() => {
     if (!editId || !meetingId) return

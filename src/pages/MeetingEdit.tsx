@@ -1,11 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Asset, ConfirmDialog, FixedBottomCTA, TextField, Top } from '@toss/tds-mobile'
-import { doc, updateDoc, getDoc } from 'firebase/firestore'
+import { doc, updateDoc } from 'firebase/firestore'
 import DatePicker from '../components/DatePicker'
 import { db } from '../lib/firebase'
 import { addPreMember, deletePreMember } from '../lib/meetingMembers'
-import { useMeetingMembers } from '../hooks/useMeeting'
+import { useMeeting } from '../hooks/useMeeting'
 import { useUserStore } from '../store/userStore'
 import { truncateName } from '../utils/format'
 
@@ -15,7 +15,9 @@ export default function MeetingEdit() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { uid } = useUserStore()
-  const { members } = useMeetingMembers(id)
+  // MeetingDetail 등 같은 모임을 보는 다른 화면과 구독을 공유한다 — 이 화면만을
+  // 위해 모임 문서를 또 getDoc으로 읽지 않는다.
+  const { meeting, members, loading: meetingLoading, error: meetingError } = useMeeting(id)
 
   const [name, setName] = useState('')
   const [date, setDate] = useState('')
@@ -35,23 +37,22 @@ export default function MeetingEdit() {
   const [memberActionError, setMemberActionError] = useState('')
   const [membersExpanded, setMembersExpanded] = useState(false)
 
+  // 폼 입력값은 처음 들어왔을 때 한 번만 채운다 — 실시간 구독이라 그 뒤에
+  // 데이터가 갱신될 때마다(예: 다른 사람이 동시에 수정) 입력 중인 값을
+  // 덮어쓰면 안 되기 때문이다.
+  const seededRef = useRef(false)
   useEffect(() => {
-    if (!id) return
-    getDoc(doc(db, 'meetings', id))
-      .then((snap) => {
-        if (!snap.exists()) { setLoadError(true); return }
-        const data = snap.data()
-        const memberUids: string[] = data.memberUids ?? []
-        if (!memberUids.includes(uid)) { setNotMember(true); return }
-        setName(data.name ?? '')
-        setDate(data.date ?? '')
-        setMemo(data.memo ?? '')
-        setCreatedBy(data.createdBy ?? '')
-        setIsSettled(data.status === 'settled')
-        setLoaded(true)
-      })
-      .catch(() => setLoadError(true))
-  }, [id, uid])
+    if (meetingLoading || seededRef.current) return
+    if (meetingError || !meeting) { setLoadError(true); return }
+    if (!members[uid]) { setNotMember(true); return }
+    setName(meeting.name ?? '')
+    setDate(meeting.date ?? '')
+    setMemo(meeting.memo ?? '')
+    setCreatedBy(meeting.createdBy ?? '')
+    setIsSettled(meeting.status === 'settled')
+    setLoaded(true)
+    seededRef.current = true
+  }, [meetingLoading, meeting, meetingError, members, uid])
 
   const canManageMembers = !isSettled && uid === createdBy
 
