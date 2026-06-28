@@ -153,44 +153,55 @@ export default {
       return new Response('publicId does not belong to meetingId', { status: 403, headers: cors })
     }
 
-    const uid = await verifyIdToken(idToken, env.FIREBASE_API_KEY)
-    if (!uid) {
-      return new Response('Unauthorized', { status: 401, headers: cors })
-    }
+    // 아래는 모두 외부 API(구글 Identity Toolkit, Firestore, Cloudinary)를
+    // 호출한다. 네트워크 순단 등으로 fetch 자체가 실패(throw)하면 try/catch가
+    // 없을 경우 Cloudflare의 기본 에러 페이지가 그대로 나가버리므로, 깨끗한
+    // JSON 에러 응답으로 통일한다.
+    try {
+      const uid = await verifyIdToken(idToken, env.FIREBASE_API_KEY)
+      if (!uid) {
+        return new Response('Unauthorized', { status: 401, headers: cors })
+      }
 
-    const isMember = await isMeetingMember(env.FIREBASE_PROJECT_ID, meetingId, uid, idToken)
-    if (!isMember) {
-      return new Response('Forbidden', { status: 403, headers: cors })
-    }
+      const isMember = await isMeetingMember(env.FIREBASE_PROJECT_ID, meetingId, uid, idToken)
+      if (!isMember) {
+        return new Response('Forbidden', { status: 403, headers: cors })
+      }
 
-    const timestamp = Math.floor(Date.now() / 1000)
-    const signature = await sha1Hex(
-      `public_id=${publicId}&timestamp=${timestamp}${env.CLOUDINARY_API_SECRET}`,
-    )
+      const timestamp = Math.floor(Date.now() / 1000)
+      const signature = await sha1Hex(
+        `public_id=${publicId}&timestamp=${timestamp}${env.CLOUDINARY_API_SECRET}`,
+      )
 
-    const form = new FormData()
-    form.append('public_id', publicId)
-    form.append('timestamp', String(timestamp))
-    form.append('api_key', env.CLOUDINARY_API_KEY)
-    form.append('signature', signature)
+      const form = new FormData()
+      form.append('public_id', publicId)
+      form.append('timestamp', String(timestamp))
+      form.append('api_key', env.CLOUDINARY_API_KEY)
+      form.append('signature', signature)
 
-    const cloudinaryRes = await fetch(
-      `https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/image/destroy`,
-      { method: 'POST', body: form },
-    )
-    const result = await cloudinaryRes.json<{ result?: string }>()
+      const cloudinaryRes = await fetch(
+        `https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/image/destroy`,
+        { method: 'POST', body: form },
+      )
+      const result = await cloudinaryRes.json<{ result?: string }>()
 
-    if (!cloudinaryRes.ok || (result.result !== 'ok' && result.result !== 'not found')) {
-      return new Response(JSON.stringify(result), {
-        status: 502,
+      if (!cloudinaryRes.ok || (result.result !== 'ok' && result.result !== 'not found')) {
+        return new Response(JSON.stringify(result), {
+          status: 502,
+          headers: { ...cors, 'Content-Type': 'application/json' },
+        })
+      }
+
+      await deleteFolderIfEmpty(env.CLOUDINARY_CLOUD_NAME, env.CLOUDINARY_API_KEY, env.CLOUDINARY_API_SECRET, `ddingdone/${meetingId}`)
+
+      return new Response(JSON.stringify({ success: true }), {
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      })
+    } catch {
+      return new Response(JSON.stringify({ error: 'Internal Server Error' }), {
+        status: 500,
         headers: { ...cors, 'Content-Type': 'application/json' },
       })
     }
-
-    await deleteFolderIfEmpty(env.CLOUDINARY_CLOUD_NAME, env.CLOUDINARY_API_KEY, env.CLOUDINARY_API_SECRET, `ddingdone/${meetingId}`)
-
-    return new Response(JSON.stringify({ success: true }), {
-      headers: { ...cors, 'Content-Type': 'application/json' },
-    })
   },
 }

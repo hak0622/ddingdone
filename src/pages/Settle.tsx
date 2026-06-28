@@ -18,6 +18,7 @@ export default function Settle() {
   const { meeting, members, expenses, loading, error } = useMeeting(meetingId)
   const [settling, setSettling] = useState(false)
   const [settleSuccess, setSettleSuccess] = useState(false)
+  const [settleError, setSettleError] = useState('')
 
   const settlements = useMemo<Settlement[]>(() => {
     if (!expenses.length || !Object.keys(members).length) return []
@@ -56,9 +57,13 @@ export default function Settle() {
   async function handleSettle() {
     if (!meetingId || settling) return
     setSettling(true)
+    setSettleError('')
     try {
       await updateDoc(doc(db, 'meetings', meetingId), { status: 'settled' })
       setSettleSuccess(true)
+    } catch {
+      setSettleError('정산 완료 처리하지 못했어요. 다시 시도해주세요.')
+      setTimeout(() => setSettleError(''), 3000)
     } finally {
       setSettling(false)
     }
@@ -242,6 +247,12 @@ export default function Settle() {
 
         </div>
       </div>
+
+      {settleError && (
+        <div style={{ position: 'fixed', bottom: 80, left: 0, right: 0, background: 'rgba(0,0,0,0.75)', color: '#fff', textAlign: 'center', padding: '12px 20px', fontSize: 14, zIndex: 100 }}>
+          {settleError}
+        </div>
+      )}
 
       {isSettled ? (
         <FixedBottomCTA onClick={handleShare}>정산 결과 공유하기</FixedBottomCTA>
