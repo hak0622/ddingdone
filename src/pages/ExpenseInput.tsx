@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Top } from '@toss/tds-mobile'
 import { collection, getDoc, doc, serverTimestamp, increment, writeBatch } from 'firebase/firestore'
@@ -32,6 +32,9 @@ export default function ExpenseInput() {
   const [error, setError] = useState('')
   const [originalAmount, setOriginalAmount] = useState(0)
   const [editLoaded, setEditLoaded] = useState(!editId)
+  // 수정 모드에서 처음 불러온 값을 기억해, 제출 시 실제로 바뀐 게 있는지
+  // 비교한다 — 아무것도 안 바꾸고 수정하기를 눌러도 쓰기가 나가지 않게 한다.
+  const originalRef = useRef({ category: '', memo: '', paidBy: '' })
 
   useEffect(() => {
     if (!loading && meeting?.status === 'settled') navigate(-1)
@@ -50,6 +53,7 @@ export default function ExpenseInput() {
       setCategory(data.category ?? '')
       setMemo(data.memo ?? '')
       setPaidBy(data.paidBy ?? '')
+      originalRef.current = { category: data.category ?? '', memo: data.memo ?? '', paidBy: data.paidBy ?? '' }
       setEditLoaded(true)
     }).catch(() => {
       setError('비용을 불러오지 못했어요.')
@@ -69,6 +73,15 @@ export default function ExpenseInput() {
 
   async function handleSubmit() {
     if (Number(amount) === 0 || !paidBy || !meetingId || submitting) return
+    if (editId) {
+      const original = originalRef.current
+      const unchanged = Number(amount) === originalAmount && category === original.category &&
+        memo === original.memo && paidBy === original.paidBy
+      if (unchanged) {
+        navigate(-1)
+        return
+      }
+    }
     setSubmitting(true)
     setError('')
     try {

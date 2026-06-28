@@ -41,6 +41,9 @@ export default function MeetingEdit() {
   // 데이터가 갱신될 때마다(예: 다른 사람이 동시에 수정) 입력 중인 값을
   // 덮어쓰면 안 되기 때문이다.
   const seededRef = useRef(false)
+  // 처음 불러온 값을 따로 기억해둔다 — 제출 시 실제로 바뀐 게 있는지 비교해서,
+  // 아무것도 안 바꾸고 수정하기를 눌러도 불필요한 쓰기가 나가지 않게 한다.
+  const originalRef = useRef({ name: '', date: '', memo: '' })
   useEffect(() => {
     if (meetingLoading || seededRef.current) return
     if (meetingError || !meeting) { setLoadError(true); return }
@@ -51,6 +54,7 @@ export default function MeetingEdit() {
     setCreatedBy(meeting.createdBy ?? '')
     setIsSettled(meeting.status === 'settled')
     setLoaded(true)
+    originalRef.current = { name: meeting.name ?? '', date: meeting.date ?? '', memo: meeting.memo ?? '' }
     seededRef.current = true
   }, [meetingLoading, meeting, meetingError, members, uid])
 
@@ -97,11 +101,18 @@ export default function MeetingEdit() {
 
   async function handleSubmit() {
     if (!id || !name.trim() || submitting) return
+    const trimmedName = name.trim()
+    const original = originalRef.current
+    // 이름/날짜/메모 중 실제로 바뀐 게 하나도 없으면 Firestore에 쓸 필요가 없다.
+    if (trimmedName === original.name && date === original.date && memo === original.memo) {
+      navigate(-1)
+      return
+    }
     setSubmitting(true)
     setError('')
     try {
       await updateDoc(doc(db, 'meetings', id), {
-        name: name.trim(),
+        name: trimmedName,
         date,
         memo,
       })
