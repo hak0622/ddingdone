@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { FixedBottomCTA, TextField, Top } from '@toss/tds-mobile'
 import { useUserStore } from '../store/userStore'
 
@@ -7,6 +7,7 @@ const NICKNAME_KEY = 'ddingdone_nickname'
 
 export default function Onboarding() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { uid, setUser } = useUserStore()
   const [nickname, setNickname] = useState('')
 
@@ -15,7 +16,10 @@ export default function Onboarding() {
     const trimmed = nickname.trim()
     localStorage.setItem(NICKNAME_KEY, trimmed)
     setUser(uid, trimmed)
-    navigate('/', { replace: true })
+    // 앱인토스 "앱 내 기능" 딥링크 등으로 닉네임 없이 들어왔다가 온보딩으로
+    // 빠진 경우, 완료 후 원래 가려던 화면으로 이어서 보낸다.
+    const next = searchParams.get('next')
+    navigate(next && next.startsWith('/') ? next : '/', { replace: true })
   }
 
   return (

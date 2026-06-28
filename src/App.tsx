@@ -66,12 +66,20 @@ function AppInit() {
           return
         }
 
-        // /meetings/:id로 직접 들어온 경우(초대 링크 query param 없이 URL을 바로 입력하는
-        // 경우 등)도 온보딩으로 보내지 않는다 — 그 모임의 "참여하시겠어요?" 화면에서
-        // 자연스럽게 닉네임을 받을 수 있으므로, 닉네임이 없다는 이유로 원래 가려던
-        // 모임을 잃어버리고 홈으로 빠지게 할 필요가 없다.
-        if (!nickname && !location.pathname.startsWith('/meetings/')) {
-          navigate('/onboarding', { replace: true })
+        // /meetings/:id(실제 모임)로 직접 들어온 경우(초대 링크 query param 없이
+        // URL을 바로 입력하는 경우, 앱인토스 "앱 내 기능" 딥링크 등)는 온보딩으로
+        // 보내지 않는다 — 그 모임의 "참여하시겠어요?" 화면에서 자연스럽게 닉네임을
+        // 받을 수 있으므로, 닉네임이 없다는 이유로 원래 가려던 모임을 잃어버리고
+        // 홈으로 빠지게 할 필요가 없다.
+        // /meetings/new는 이 예외에서 제외한다 — 닉네임을 받는 화면이 아니라서,
+        // 닉네임 없이 그대로 들어오면 빈 이름으로 모임이 만들어진다.
+        const meetingIdMatch = location.pathname.match(/^\/meetings\/([^/]+)$/)
+        const isExistingMeetingLink = !!meetingIdMatch && meetingIdMatch[1] !== 'new'
+        if (!nickname && !isExistingMeetingLink) {
+          // 온보딩을 거친 뒤 원래 가려던 화면(예: 앱인토스 "앱 내 기능" 딥링크로
+          // 들어온 /meetings/new)으로 이어서 보내기 위해 목적지를 같이 넘긴다.
+          const next = encodeURIComponent(location.pathname + location.search)
+          navigate(`/onboarding?next=${next}`, { replace: true })
         }
       } catch {
         setInitError(true)
