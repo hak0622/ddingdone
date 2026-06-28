@@ -5,6 +5,39 @@ export interface UploadedImage {
   publicId: string
 }
 
+const MAX_DIMENSION = 1600
+const JPEG_QUALITY = 0.82
+
+/**
+ * 업로드 전에 화면에 보일 용도로는 과한 카메라 원본 해상도를 줄이고
+ * 재압축한다. EXIF 방향 정보(imageOrientation: 'from-image')를 반영해야
+ * 세로로 찍은 사진이 캔버스에 옆으로 누운 채로 그려지지 않는다. 어떤
+ * 이유로든 압축이 실패하면(지원하지 않는 형식 등) 원본 파일을 그대로
+ * 반환해 업로드 자체가 막히지 않게 한다.
+ */
+async function compressImage(file: File, maxDimension = MAX_DIMENSION, quality = JPEG_QUALITY): Promise<File> {
+  try {
+    const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' })
+    const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height))
+    const width = Math.round(bitmap.width * scale)
+    const height = Math.round(bitmap.height * scale)
+
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) { bitmap.close(); return file }
+    ctx.drawImage(bitmap, 0, 0, width, height)
+    bitmap.close()
+
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality))
+    if (!blob) return file
+    return new File([blob], file.name.replace(/\.\w+$/, '.jpg'), { type: 'image/jpeg' })
+  } catch {
+    return file
+  }
+}
+
 /**
  * Cloudinary unsigned upload.
  * meetingId를 폴더로 지정해 publicId가 항상 `ddingdone/{meetingId}/...` 형태가
@@ -20,8 +53,10 @@ export async function uploadImage(file: File, meetingId: string): Promise<Upload
     throw new Error('Cloudinary 환경변수가 설정되지 않았습니다.')
   }
 
+  const compressed = await compressImage(file)
+
   const formData = new FormData()
-  formData.append('file', file)
+  formData.append('file', compressed)
   formData.append('upload_preset', uploadPreset)
   formData.append('folder', `ddingdone/${meetingId}`)
 
