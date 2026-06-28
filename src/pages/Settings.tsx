@@ -53,6 +53,14 @@ export default function Settings() {
   async function handleSave() {
     const trimmed = value.trim()
     if (!trimmed || !uid) return
+    // 닉네임이 실제로 바뀌지 않았으면 내가 속한 모든 모임을 다시 읽고
+    // 멤버 문서를 전부 다시 쓰는 동기화 자체를 할 필요가 없다 — 그대로
+    // 저장 버튼을 누르기만 해도 매번 불필요한 읽기/쓰기가 나가고 있었다.
+    if (trimmed === nickname) {
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+      return
+    }
     setSaving(true)
     try {
       localStorage.setItem(NICKNAME_KEY, trimmed)
