@@ -22,19 +22,20 @@ export default function ExpenseInput() {
   const { uid } = useUserStore()
   // 정산 완료 여부는 같은 모임을 보고 있는 다른 화면(상세 등)과 공유되는
   // 구독에서 그대로 가져온다 — 화면마다 따로 getDoc을 또 호출할 필요가 없다.
-  const { meeting, members, loading } = useMeeting(meetingId)
+  const { meeting, loading } = useMeeting(meetingId)
 
   const [amount, setAmount] = useState('')
   const [category, setCategory] = useState('')
   const [memo, setMemo] = useState('')
-  const [paidBy, setPaidBy] = useState(uid)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [originalAmount, setOriginalAmount] = useState(0)
   const [editLoaded, setEditLoaded] = useState(!editId)
   // 수정 모드에서 처음 불러온 값을 기억해, 제출 시 실제로 바뀐 게 있는지
   // 비교한다 — 아무것도 안 바꾸고 수정하기를 눌러도 쓰기가 나가지 않게 한다.
-  const originalRef = useRef({ category: '', memo: '', paidBy: '' })
+  // paidBy는 항상 본인이라 비교 대상에서 제외한다 — 다른 사람 비용을 대신
+  // 추가/수정할 수 없게 하라는 실제 사용자 피드백에 따라 결제자 선택 UI를 없앴다.
+  const originalRef = useRef({ category: '', memo: '' })
 
   useEffect(() => {
     if (!loading && meeting?.status === 'settled') navigate(-1)
@@ -48,21 +49,30 @@ export default function ExpenseInput() {
         return
       }
       const data = snap.data()
+      // 본인 비용만 수정할 수 있다 — 다른 사람 비용 수정 링크에 직접 들어와도 막는다.
+      if (data.paidBy !== uid) {
+        navigate(-1)
+        return
+      }
       setAmount(String(data.amount ?? ''))
       setOriginalAmount(data.amount ?? 0)
       setCategory(data.category ?? '')
       setMemo(data.memo ?? '')
-      setPaidBy(data.paidBy ?? '')
-      originalRef.current = { category: data.category ?? '', memo: data.memo ?? '', paidBy: data.paidBy ?? '' }
+      originalRef.current = { category: data.category ?? '', memo: data.memo ?? '' }
       setEditLoaded(true)
     }).catch(() => {
       setError('비용을 불러오지 못했어요.')
       setEditLoaded(true)
     })
-  }, [editId, meetingId])
+  }, [editId, meetingId, uid])
+
+  // 한 건당 지출은 999만 9999원까지만 받는다 — 친구끼리 더치페이하는 항목
+  // 단위로는 충분히 넉넉한 한도이면서, 자릿수를 7자리로 고정해 입력창이
+  // 항상 같은 폭에서 잘리지 않고 보이게 한다.
+  const MAX_AMOUNT_DIGITS = 7
 
   function handleAmountChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const raw = e.target.value.replace(/[^0-9]/g, '')
+    const raw = e.target.value.replace(/[^0-9]/g, '').slice(0, MAX_AMOUNT_DIGITS)
     setAmount(raw)
   }
 
@@ -72,11 +82,11 @@ export default function ExpenseInput() {
   }
 
   async function handleSubmit() {
-    if (Number(amount) === 0 || !paidBy || !meetingId || submitting) return
+    if (Number(amount) === 0 || !uid || !meetingId || submitting) return
     if (editId) {
       const original = originalRef.current
       const unchanged = Number(amount) === originalAmount && category === original.category &&
-        memo === original.memo && paidBy === original.paidBy
+        memo === original.memo
       if (unchanged) {
         navigate(-1)
         return
@@ -90,7 +100,6 @@ export default function ExpenseInput() {
         batch.update(doc(db, 'meetings', meetingId, 'expenses', editId), {
           amount: Number(amount),
           category,
-          paidBy,
           memo,
         })
         batch.update(doc(db, 'meetings', meetingId), {
@@ -101,7 +110,7 @@ export default function ExpenseInput() {
         batch.set(expenseRef, {
           amount: Number(amount),
           category,
-          paidBy,
+          paidBy: uid,
           memo,
           createdAt: serverTimestamp(),
         })
@@ -119,7 +128,7 @@ export default function ExpenseInput() {
     }
   }
 
-  const isValid = Number(amount) > 0 && paidBy !== '' && !submitting && editLoaded
+  const isValid = Number(amount) > 0 && !submitting && editLoaded
 
   return (
     <>
@@ -137,7 +146,11 @@ export default function ExpenseInput() {
                 outline: 'none',
                 textAlign: 'right',
                 background: 'transparent',
-                width: '55%',
+                // "9,999,999"(최대 7자리 + 콤마 2개)까지 잘리지 않을 만큼의 폭을
+                // 고정폭(ch)으로 잡아둔다 — %는 화면 폭에 따라 달라져서 정확한
+                // 보장이 안 된다.
+                width: '11ch',
+                maxWidth: '70%',
                 color: '#191919',
               }}
               placeholder="0"
@@ -188,6 +201,7 @@ export default function ExpenseInput() {
             value={memo}
             onChange={(e) => setMemo(e.target.value)}
             placeholder="예: 저녁 삼겹살"
+            maxLength={9}
             style={{
               width: '100%',
               padding: '12px 14px',
@@ -200,41 +214,6 @@ export default function ExpenseInput() {
               background: '#fff',
             }}
           />
-        </div>
-
-        {/* 결제자 */}
-        <div>
-          <p style={{ fontSize: 13, fontWeight: 600, color: '#888', margin: '0 0 8px' }}>결제자</p>
-          {loading ? (
-            <p style={{ fontSize: 14, color: '#8b8b8b' }}>불러오는 중...</p>
-          ) : (
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {Object.entries(members)
-                .sort(([a], [b]) => {
-                  if (a === uid) return -1
-                  if (b === uid) return 1
-                  return 0
-                })
-                .map(([memberUid, name]) => (
-                  <button
-                    key={memberUid}
-                    onClick={() => setPaidBy(memberUid)}
-                    style={{
-                      padding: '10px 22px',
-                      borderRadius: 24,
-                      border: 'none',
-                      cursor: 'pointer',
-                      fontSize: 15,
-                      fontWeight: 600,
-                      background: paidBy === memberUid ? '#3182F6' : '#f5f5f5',
-                      color: paidBy === memberUid ? '#fff' : '#555',
-                    }}
-                  >
-                    {uid === memberUid ? '나' : name}
-                  </button>
-                ))}
-            </div>
-          )}
         </div>
 
         {error && (

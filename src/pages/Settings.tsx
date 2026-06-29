@@ -103,7 +103,7 @@ export default function Settings() {
                 setValue(e.target.value)
                 setSaved(false)
               }}
-              maxLength={20}
+              maxLength={10}
             />
             <button
               onClick={handleSave}

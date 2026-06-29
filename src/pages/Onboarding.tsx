@@ -35,7 +35,7 @@ export default function Onboarding() {
           placeholder="예: 민수"
           value={nickname}
           onChange={(e) => setNickname(e.target.value)}
-          maxLength={20}
+          maxLength={10}
         />
       </div>
       <FixedBottomCTA

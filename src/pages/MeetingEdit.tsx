@@ -1,15 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Asset, ConfirmDialog, FixedBottomCTA, TextField, Top } from '@toss/tds-mobile'
+import { FixedBottomCTA, TextField, Top } from '@toss/tds-mobile'
 import { doc, updateDoc } from 'firebase/firestore'
 import DatePicker from '../components/DatePicker'
 import { db } from '../lib/firebase'
-import { addPreMember, deletePreMember } from '../lib/meetingMembers'
 import { useMeeting } from '../hooks/useMeeting'
 import { useUserStore } from '../store/userStore'
-import { truncateName } from '../utils/format'
-
-const MEMBER_CHIP_LIMIT = 3
 
 export default function MeetingEdit() {
   const { id } = useParams<{ id: string }>()
@@ -22,20 +18,11 @@ export default function MeetingEdit() {
   const [name, setName] = useState('')
   const [date, setDate] = useState('')
   const [memo, setMemo] = useState('')
-  const [createdBy, setCreatedBy] = useState('')
-  const [isSettled, setIsSettled] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [loadError, setLoadError] = useState(false)
   const [notMember, setNotMember] = useState(false)
-
-  const [memberInput, setMemberInput] = useState('')
-  const [memberError, setMemberError] = useState(false)
-  const [addingMember, setAddingMember] = useState(false)
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
-  const [memberActionError, setMemberActionError] = useState('')
-  const [membersExpanded, setMembersExpanded] = useState(false)
 
   // 폼 입력값은 처음 들어왔을 때 한 번만 채운다 — 실시간 구독이라 그 뒤에
   // 데이터가 갱신될 때마다(예: 다른 사람이 동시에 수정) 입력 중인 값을
@@ -51,53 +38,10 @@ export default function MeetingEdit() {
     setName(meeting.name ?? '')
     setDate(meeting.date ?? '')
     setMemo(meeting.memo ?? '')
-    setCreatedBy(meeting.createdBy ?? '')
-    setIsSettled(meeting.status === 'settled')
     setLoaded(true)
     originalRef.current = { name: meeting.name ?? '', date: meeting.date ?? '', memo: meeting.memo ?? '' }
     seededRef.current = true
   }, [meetingLoading, meeting, meetingError, members, uid])
-
-  const canManageMembers = !isSettled && uid === createdBy
-
-  function showMemberActionError(msg: string) {
-    setMemberActionError(msg)
-    setTimeout(() => setMemberActionError(''), 3000)
-  }
-
-  async function handleAddMember() {
-    const trimmed = memberInput.trim()
-    if (trimmed.length === 0) {
-      setMemberInput('')
-      return
-    }
-    if (!id || addingMember) return
-    if (Object.values(members).includes(trimmed)) {
-      setMemberError(true)
-      return
-    }
-    setAddingMember(true)
-    try {
-      await addPreMember(id, trimmed)
-      setMemberInput('')
-      setMemberError(false)
-    } catch {
-      showMemberActionError('참여자를 추가하지 못했어요. 다시 시도해주세요.')
-    } finally {
-      setAddingMember(false)
-    }
-  }
-
-  async function handleConfirmDeleteMember() {
-    if (!id || !deleteTarget) return
-    const target = deleteTarget
-    setDeleteTarget(null)
-    try {
-      await deletePreMember(id, target)
-    } catch {
-      showMemberActionError('참여자를 삭제하지 못했어요. 다시 시도해주세요.')
-    }
-  }
 
   async function handleSubmit() {
     if (!id || !name.trim() || submitting) return
@@ -172,15 +116,6 @@ export default function MeetingEdit() {
   }
 
   const isDateValid = /^\d{4}\.\d{2}\.\d{2}$/.test(date)
-  // Firestore 구독 결과의 순서는 보장되지 않아 새 멤버가 들어올 때마다 순서가
-  // 흔들릴 수 있다. "나"는 항상 맨 앞에 고정한다.
-  const memberEntries = Object.entries(members).sort(([a], [b]) => {
-    if (a === uid) return -1
-    if (b === uid) return 1
-    return 0
-  })
-  const visibleMemberEntries = membersExpanded ? memberEntries : memberEntries.slice(0, MEMBER_CHIP_LIMIT)
-  const hiddenMemberCount = memberEntries.length - MEMBER_CHIP_LIMIT
 
   return (
     <>
@@ -197,161 +132,16 @@ export default function MeetingEdit() {
             label="방 이름"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            maxLength={30}
+            maxLength={16}
           />
           <DatePicker value={date} onChange={setDate} />
-          <TextField
-            variant="box"
-            labelOption="sustain"
-            label="참여자"
-            placeholder={canManageMembers ? '이름 입력 후 추가' : '방장만 추가/삭제할 수 있어요'}
-            value={memberInput}
-            onChange={(e) => {
-              setMemberInput(e.target.value)
-              setMemberError(false)
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                handleAddMember()
-              }
-            }}
-            disabled={!canManageMembers}
-            help={
-              <>
-                {memberError ? (
-                  <span style={{ color: '#ef4444' }}>이미 추가된 참여자예요</span>
-                ) : !canManageMembers ? (
-                  '방장만 참여자를 추가하거나 삭제할 수 있어요'
-                ) : (
-                  '아직 들어오지 않은 참여자만 삭제할 수 있어요'
-                )}
-                {memberEntries.length > 0 && (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-                    {visibleMemberEntries.map(([memberUid, nickname]) => {
-                      const isPreMember = memberUid.startsWith('pre_')
-                      const canRemove = canManageMembers && isPreMember
-                      return (
-                        <span
-                          key={memberUid}
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 4,
-                            padding: canRemove ? '4px 6px 4px 10px' : '4px 10px',
-                            fontSize: 13,
-                            border: '1px solid #e8e8e8',
-                            borderRadius: 20,
-                            background: '#f5f5f5',
-                            color: '#333',
-                          }}
-                        >
-                          {memberUid === uid ? `${truncateName(nickname)}(나)` : truncateName(nickname)}
-                          {canRemove && (
-                            <button
-                              onClick={() => setDeleteTarget(memberUid)}
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                width: 16,
-                                height: 16,
-                                borderRadius: '50%',
-                                border: 'none',
-                                background: '#ccc',
-                                color: '#fff',
-                                fontSize: 10,
-                                fontWeight: 700,
-                                cursor: 'pointer',
-                                lineHeight: 1,
-                                padding: 0,
-                                flexShrink: 0,
-                              }}
-                            >
-                              ✕
-                            </button>
-                          )}
-                        </span>
-                      )
-                    })}
-                    {!membersExpanded && hiddenMemberCount > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => setMembersExpanded(true)}
-                        style={{
-                          padding: '4px 10px',
-                          fontSize: 13,
-                          fontWeight: 600,
-                          border: '1px solid #e8e8e8',
-                          borderRadius: 20,
-                          background: '#fff',
-                          color: '#3182F6',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        +{hiddenMemberCount}명
-                      </button>
-                    )}
-                    {membersExpanded && memberEntries.length > MEMBER_CHIP_LIMIT && (
-                      <button
-                        type="button"
-                        onClick={() => setMembersExpanded(false)}
-                        style={{
-                          padding: '4px 10px',
-                          fontSize: 13,
-                          fontWeight: 600,
-                          border: '1px solid #e8e8e8',
-                          borderRadius: 20,
-                          background: '#fff',
-                          color: '#888',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        접기
-                      </button>
-                    )}
-                  </div>
-                )}
-              </>
-            }
-            right={
-              canManageMembers ? (
-                <button
-                  type="button"
-                  onClick={handleAddMember}
-                  disabled={memberInput.trim().length === 0 || addingMember}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    background: 'none',
-                    border: 'none',
-                    padding: 4,
-                    cursor: memberInput.trim().length === 0 ? 'default' : 'pointer',
-                    opacity: memberInput.trim().length === 0 ? 0.4 : 1,
-                  }}
-                >
-                  <Asset.Icon
-                    frameShape={Asset.frameShape.CleanW24}
-                    backgroundColor="transparent"
-                    name="icon-plus-circle-blue"
-                    aria-hidden={true}
-                    ratio="1/1"
-                  />
-                </button>
-              ) : undefined
-            }
-          />
-          {memberActionError && (
-            <p style={{ fontSize: 13, color: '#ef4444', margin: 0 }}>{memberActionError}</p>
-          )}
           <TextField
             variant="box"
             labelOption="sustain"
             label="한줄 메모"
             value={memo}
             onChange={(e) => setMemo(e.target.value)}
-            maxLength={50}
+            maxLength={16}
           />
         </div>
       )}
@@ -363,23 +153,6 @@ export default function MeetingEdit() {
       <FixedBottomCTA disabled={!name.trim() || !isDateValid || submitting} onClick={handleSubmit}>
         {submitting ? '수정 중...' : '수정하기'}
       </FixedBottomCTA>
-
-      <ConfirmDialog
-        open={deleteTarget !== null}
-        title="참여자를 삭제할까요?"
-        description="이 참여자가 결제한 비용도 함께 삭제돼요."
-        onClose={() => setDeleteTarget(null)}
-        confirmButton={
-          <ConfirmDialog.ConfirmButton onClick={handleConfirmDeleteMember}>
-            삭제
-          </ConfirmDialog.ConfirmButton>
-        }
-        cancelButton={
-          <ConfirmDialog.CancelButton onClick={() => setDeleteTarget(null)}>
-            취소
-          </ConfirmDialog.CancelButton>
-        }
-      />
     </>
   )
 }

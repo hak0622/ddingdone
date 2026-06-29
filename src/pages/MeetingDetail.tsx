@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Asset, BottomSheet, ConfirmDialog, FixedBottomCTA, List, ListRow, Top, useBottomSheet } from '@toss/tds-mobile'
+import { Asset, BottomSheet, ConfirmDialog, FixedBottomCTA, List, ListRow, TextField, Top, useBottomSheet } from '@toss/tds-mobile'
 import { doc, updateDoc, writeBatch, increment, arrayUnion } from 'firebase/firestore'
 import { formatKRW, truncateName } from '../utils/format'
 import { COLORS } from '../styles/tokens'
 import { db } from '../lib/firebase'
 import { uploadImage, deleteImage } from '../lib/cloudinary'
 import { shareInviteLink } from '../lib/bridge'
-import { deletePreMember } from '../lib/meetingMembers'
 import { useMeeting } from '../hooks/useMeeting'
 import { useUserStore } from '../store/userStore'
 import ResultScreen from '../components/ResultScreen'
@@ -42,7 +41,7 @@ export default function MeetingDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { meeting, members, expenses, loading, error } = useMeeting(id)
-  const { uid, setUser } = useUserStore()
+  const { uid, nickname: myNickname, setUser } = useUserStore()
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState(false)
   const [pendingFile, setPendingFile] = useState<File | null>(null)
@@ -54,7 +53,6 @@ export default function MeetingDetail() {
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
   const [confirmDeleteMeeting, setConfirmDeleteMeeting] = useState(false)
   const [deletingMeeting, setDeletingMeeting] = useState(false)
-  const [deletePreMemberTarget, setDeletePreMemberTarget] = useState<string | null>(null)
   const [actionError, setActionError] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { open: openManageSheet, close: closeManageSheet } = useBottomSheet()
@@ -74,39 +72,12 @@ export default function MeetingDetail() {
     }
   }
 
-  // 아직 한 번도 안 들어온 placeholder(pre_) 자리만 claim 가능하다. 이미 활동 중인
-  // 실제 멤버까지 claim 대상에 포함시키면, 전혀 모르는 사람이 뱃지를 눌러서 그
-  // 사람의 자리를 빼앗아버릴 수 있어 — 본인 확인 수단이 없는 이 앱 구조에서는
-  // "자기 자리 복구"와 "남의 자리 탈취"를 구분할 방법이 없기 때문에 위험하다.
-  async function claimPreMember(preUid: string, nickname: string) {
-    if (!id || !uid) return
+  async function joinAsNew(rawNickname: string) {
+    const nickname = rawNickname.trim()
+    if (!id || !uid || !nickname || isSettled) return
     setJoining(true)
     setJoinError('')
     try {
-      const batch = writeBatch(db)
-      expenses
-        .filter((e) => e.paidBy === preUid)
-        .forEach((e) => batch.update(doc(db, 'meetings', id, 'expenses', e.id), { paidBy: uid }))
-      batch.set(doc(db, 'meetings', id, 'members', uid), { nickname })
-      batch.delete(doc(db, 'meetings', id, 'members', preUid))
-      batch.update(doc(db, 'meetings', id), { memberUids: arrayUnion(uid) })
-      await batch.commit()
-      localStorage.setItem('ddingdone_nickname', nickname)
-      setUser(uid, nickname)
-      setJoinedNickname(nickname)
-    } catch {
-      setJoinError('참여에 실패했어요. 다시 시도해주세요.')
-    } finally {
-      setJoining(false)
-    }
-  }
-
-  async function joinAsNew() {
-    if (!id || !uid || !joinNickname.trim() || isSettled) return
-    setJoining(true)
-    setJoinError('')
-    try {
-      const nickname = joinNickname.trim()
       const batch = writeBatch(db)
       batch.set(doc(db, 'meetings', id, 'members', uid), { nickname })
       batch.update(doc(db, 'meetings', id), {
@@ -263,15 +234,6 @@ export default function MeetingDetail() {
     })
   }
 
-  async function handleDeletePreMember(preUid: string) {
-    if (!id) return
-    try {
-      await deletePreMember(id, preUid)
-    } catch {
-      showActionError('멤버를 삭제하지 못했어요. 다시 시도해주세요.')
-    }
-  }
-
   async function handleDeleteExpense(expenseId: string) {
     if (!id) return
     const expense = expenses.find((e) => e.id === expenseId)
@@ -359,9 +321,6 @@ export default function MeetingDetail() {
   }
 
   const isNotMember = !loading && !!uid && !members[uid]
-  // 아직 한 번도 안 들어온 pre_ placeholder만 claim 대상으로 보여준다. 이미 활동
-  // 중인 실제 멤버까지 노출하면, 전혀 모르는 사람이 그 자리를 눌러서 가져갈 수 있다.
-  const preMembers = Object.entries(members).filter(([memberUid]) => memberUid.startsWith('pre_'))
 
   if (joinedNickname) {
     return (
@@ -374,6 +333,80 @@ export default function MeetingDetail() {
   }
 
   if (isNotMember) {
+    // 닉네임이 아예 없는 첫 진입자는 "참여하시겠어요?" 확인 질문 없이, 앱
+    // 최초 실행 시 보여주는 온보딩(Onboarding.tsx)과 똑같은 UI로 곧장
+    // 닉네임을 받는다. 제출 한 번(joinAsNew)으로 닉네임 설정과 참여가 동시에
+    // 끝난다 — /onboarding으로 실제로 이동시키면 거기서 한 번, 돌아와서
+    // "{닉네임}으로 참여하기"를 또 눌러야 해서 탭이 한 번 더 늘어나기 때문에
+    // 같은 화면 안에서 모양만 맞춰 한 번에 끝내는 쪽을 택했다.
+    if (!myNickname && !isSettled) {
+      return (
+        <>
+          <Top title={<Top.TitleParagraph size={22}>{meeting.name}</Top.TitleParagraph>} />
+          <div style={{ padding: '32px 20px 0' }}>
+            <p style={{ fontSize: 18, fontWeight: 600, marginBottom: 24 }}>
+              반가워요! 어떻게 불러드릴까요?
+            </p>
+            <TextField
+              variant="big"
+              label="닉네임"
+              placeholder="예: 민수"
+              value={joinNickname}
+              onChange={(e) => setJoinNickname(e.target.value)}
+              maxLength={10}
+              hasError={!!joinError}
+              help={joinError || undefined}
+            />
+          </div>
+          <FixedBottomCTA
+            disabled={joining || !joinNickname.trim()}
+            onClick={() => joinAsNew(joinNickname)}
+          >
+            {joining ? '참여하는 중...' : '참여하기'}
+          </FixedBottomCTA>
+        </>
+      )
+    }
+
+    if (isSettled) {
+      return (
+        <>
+          <Top title={<Top.TitleParagraph size={22}>{meeting.name}</Top.TitleParagraph>} />
+          <div style={{ padding: '32px 20px 0' }}>
+            <img
+              src="https://static.toss.im/3d-emojis/u1F519-return.png"
+              alt=""
+              style={{ width: 64, height: 64, display: 'block', marginBottom: 20 }}
+            />
+            <p style={{ fontSize: 24, fontWeight: 700, margin: '0 0 12px', color: '#191F28' }}>
+              정산이 완료된 방이에요.
+            </p>
+            <p style={{ fontSize: 16, color: '#4E5968', margin: myNickname ? 0 : '0 0 28px' }}>
+              이번 모임에는 참여할 수 없어요.
+            </p>
+            {!myNickname && (
+              <p style={{ fontSize: 15, color: '#8B95A1', margin: 0, lineHeight: 1.6 }}>
+                닉네임을 설정하면
+                <br />
+                다음 모임부터 정산과 추억을
+                <br />
+                함께 남길 수 있어요.
+              </p>
+            )}
+          </div>
+          <FixedBottomCTA
+            // 닉네임이 있는(이미 다른 모임을 써본) 사람은 본인 모임 목록이 있는
+            // 홈으로 보내고, 닉네임이 아예 없는 첫 진입자는 온보딩으로 보낸다 —
+            // 닉네임 없이 홈으로 보내면 이후 "새 정산방 만들기"에서 빈 닉네임으로
+            // 모임이 만들어지는 문제가 생긴다.
+            onClick={() => navigate(myNickname ? '/' : '/onboarding')}
+          >
+            {myNickname ? '홈으로' : '닉네임 설정하기'}
+          </FixedBottomCTA>
+        </>
+      )
+    }
+
     return (
       <>
         <Top title={<Top.TitleParagraph size={22}>{meeting.name}</Top.TitleParagraph>} />
@@ -382,76 +415,24 @@ export default function MeetingDetail() {
             이 정산방에 참여하시겠어요?
           </p>
 
-          {preMembers.length > 0 && (
-            <div style={{ marginBottom: 28 }}>
-              <p style={{ fontSize: 13, color: '#888', margin: '0 0 12px' }}>
-                기존 참여자 중 나를 선택하세요
-              </p>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                {preMembers.map(([preUid, nickname]) => (
-                  <button
-                    key={preUid}
-                    onClick={() => claimPreMember(preUid, nickname)}
-                    disabled={joining}
-                    style={{
-                      padding: '8px 16px',
-                      fontSize: 14,
-                      border: '1px solid #d8d8d8',
-                      borderRadius: 20,
-                      background: '#f5f5f5',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {nickname}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {!isSettled && (
-            <div>
-              <p style={{ fontSize: 13, color: '#888', margin: '0 0 8px' }}>새 닉네임으로 참여</p>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <input
-                  value={joinNickname}
-                  onChange={(e) => setJoinNickname(e.target.value)}
-                  placeholder="닉네임 입력"
-                  style={{
-                    flex: 1,
-                    padding: '10px 14px',
-                    fontSize: 14,
-                    border: '1px solid #d8d8d8',
-                    borderRadius: 8,
-                    outline: 'none',
-                  }}
-                />
-                <button
-                  onClick={joinAsNew}
-                  disabled={joining || !joinNickname.trim()}
-                  style={{
-                    padding: '10px 16px',
-                    fontSize: 14,
-                    fontWeight: 600,
-                    border: 'none',
-                    borderRadius: 8,
-                    background: joinNickname.trim() ? COLORS.primary : '#d8d8d8',
-                    color: '#fff',
-                    cursor: joinNickname.trim() ? 'pointer' : 'default',
-                  }}
-                >
-                  참여하기
-                </button>
-              </div>
-            </div>
-          )}
-          {isSettled && (
-            <p style={{ fontSize: 13, color: '#888', margin: 0 }}>
-              {preMembers.length > 0
-                ? '정산이 완료된 방이라 새로운 참여자는 추가할 수 없어요. 기존 참여자 중 본인이 있다면 위에서 선택해주세요.'
-                : '정산이 완료된 방이라 더 이상 참여할 수 없어요.'}
-            </p>
-          )}
+          <button
+            onClick={() => joinAsNew(myNickname)}
+            disabled={joining}
+            style={{
+              display: 'block',
+              width: '100%',
+              padding: '14px 0',
+              fontSize: 15,
+              fontWeight: 600,
+              border: 'none',
+              borderRadius: 12,
+              background: joining ? '#aaa' : COLORS.primary,
+              color: '#fff',
+              cursor: joining ? 'default' : 'pointer',
+            }}
+          >
+            {joining ? '참여하는 중...' : `${myNickname}으로 참여하기`}
+          </button>
           {joinError && (
             <p style={{ fontSize: 13, color: '#ef4444', margin: '12px 0 0' }}>{joinError}</p>
           )}
@@ -481,43 +462,22 @@ export default function MeetingDetail() {
       onDimmerClick: closeMembersSheet,
       children: (
         <div style={{ padding: '0 20px 24px', maxHeight: '60vh', overflowY: 'auto' }}>
-          {memberEntries.map(([memberUid, name]) => {
-            const canDeleteMember = !isSettled && uid === meeting.createdBy && memberUid.startsWith('pre_')
-            return (
-              <div
-                key={memberUid}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '12px 0',
-                  borderBottom: '1px solid #f0f0f0',
-                }}
-              >
-                <span style={{ fontSize: 15, color: '#191919' }}>
-                  {memberUid === uid ? `${name}(나)` : name}
-                </span>
-                {canDeleteMember && (
-                  <button
-                    onClick={() => setDeletePreMemberTarget(memberUid)}
-                    style={{
-                      padding: '4px 10px',
-                      borderRadius: 20,
-                      border: 'none',
-                      cursor: 'pointer',
-                      fontSize: 12,
-                      fontWeight: 600,
-                      background: '#FFEBEB',
-                      color: '#ef4444',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    삭제
-                  </button>
-                )}
-              </div>
-            )
-          })}
+          {memberEntries.map(([memberUid, name]) => (
+            <div
+              key={memberUid}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '12px 0',
+                borderBottom: '1px solid #f0f0f0',
+              }}
+            >
+              <span style={{ fontSize: 15, color: '#191919' }}>
+                {memberUid === uid ? `${name}(나)` : name}
+              </span>
+            </div>
+          ))}
         </div>
       ),
     })
@@ -965,28 +925,6 @@ export default function MeetingDetail() {
         }
         cancelButton={
           <ConfirmDialog.CancelButton onClick={() => setDeleteTargetId(null)}>
-            취소
-          </ConfirmDialog.CancelButton>
-        }
-      />
-
-      <ConfirmDialog
-        open={deletePreMemberTarget !== null}
-        title="멤버를 삭제할까요?"
-        description="이 멤버가 결제한 비용도 함께 삭제돼요."
-        onClose={() => setDeletePreMemberTarget(null)}
-        confirmButton={
-          <ConfirmDialog.ConfirmButton
-            onClick={() => {
-              if (deletePreMemberTarget) handleDeletePreMember(deletePreMemberTarget)
-              setDeletePreMemberTarget(null)
-            }}
-          >
-            삭제
-          </ConfirmDialog.ConfirmButton>
-        }
-        cancelButton={
-          <ConfirmDialog.CancelButton onClick={() => setDeletePreMemberTarget(null)}>
             취소
           </ConfirmDialog.CancelButton>
         }
