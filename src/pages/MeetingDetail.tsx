@@ -854,7 +854,11 @@ export default function MeetingDetail() {
                     contents={
                       <ListRow.Texts
                         type="2RowTypeA"
-                        top={displayTitle}
+                        top={
+                          <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {displayTitle}
+                          </span>
+                        }
                         bottom={`${paidByName} 납부`}
                       />
                     }

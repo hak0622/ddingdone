@@ -132,7 +132,7 @@ export default function MeetingEdit() {
             label="방 이름"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            maxLength={16}
+            maxLength={11}
           />
           <DatePicker value={date} onChange={setDate} />
           <TextField

@@ -93,7 +93,7 @@ export default function MeetingNew() {
           placeholder="예: 제주도 여행"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          maxLength={16}
+          maxLength={11}
         />
         <DatePicker value={date} onChange={setDate} />
         <TextField
