@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Top } from '@toss/tds-mobile'
-import { collection, getDoc, doc, serverTimestamp, increment, writeBatch } from 'firebase/firestore'
+import { collection, doc, serverTimestamp, increment, writeBatch } from 'firebase/firestore'
 import { db } from '../lib/firebase'
 import { useMeeting } from '../hooks/useMeeting'
 import { useUserStore } from '../store/userStore'
@@ -20,9 +20,10 @@ export default function ExpenseInput() {
   const [searchParams] = useSearchParams()
   const editId = searchParams.get('editId')
   const { uid } = useUserStore()
-  // 정산 완료 여부는 같은 모임을 보고 있는 다른 화면(상세 등)과 공유되는
-  // 구독에서 그대로 가져온다 — 화면마다 따로 getDoc을 또 호출할 필요가 없다.
-  const { meeting, loading } = useMeeting(meetingId)
+  // 정산 완료 여부, 수정할 비용 데이터 모두 같은 모임을 보고 있는 다른 화면
+  // (상세 등)과 공유되는 구독에서 그대로 가져온다 — 화면마다 따로 getDoc을
+  // 또 호출할 필요가 없다.
+  const { meeting, expenses, expensesReady, loading } = useMeeting(meetingId)
 
   const [amount, setAmount] = useState('')
   const [category, setCategory] = useState('')
@@ -42,29 +43,21 @@ export default function ExpenseInput() {
   }, [loading, meeting])
 
   useEffect(() => {
-    if (!editId || !meetingId) return
-    getDoc(doc(db, 'meetings', meetingId, 'expenses', editId)).then((snap) => {
-      if (!snap.exists()) {
-        navigate(-1)
-        return
-      }
-      const data = snap.data()
-      // 본인 비용만 수정할 수 있다 — 다른 사람 비용 수정 링크에 직접 들어와도 막는다.
-      if (data.paidBy !== uid) {
-        navigate(-1)
-        return
-      }
-      setAmount(String(data.amount ?? ''))
-      setOriginalAmount(data.amount ?? 0)
-      setCategory(data.category ?? '')
-      setMemo(data.memo ?? '')
-      originalRef.current = { category: data.category ?? '', memo: data.memo ?? '' }
-      setEditLoaded(true)
-    }).catch(() => {
-      setError('비용을 불러오지 못했어요.')
-      setEditLoaded(true)
-    })
-  }, [editId, meetingId, uid])
+    if (!editId || !expensesReady) return
+    const target = expenses.find((e) => e.id === editId)
+    // 존재하지 않거나 본인 비용이 아니면(다른 사람 비용 수정 링크에 직접
+    // 들어온 경우 포함) 막는다 — 본인 비용만 수정할 수 있다.
+    if (!target || target.paidBy !== uid) {
+      navigate(-1)
+      return
+    }
+    setAmount(String(target.amount))
+    setOriginalAmount(target.amount)
+    setCategory(target.category)
+    setMemo(target.memo)
+    originalRef.current = { category: target.category, memo: target.memo }
+    setEditLoaded(true)
+  }, [editId, expenses, expensesReady, uid])
 
   // 한 건당 지출은 999만 9999원까지만 받는다 — 친구끼리 더치페이하는 항목
   // 단위로는 충분히 넉넉한 한도이면서, 자릿수를 7자리로 고정해 입력창이

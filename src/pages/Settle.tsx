@@ -204,8 +204,8 @@ export default function Settle() {
                     borderBottom: '1px solid #f0f0f0',
                   }}
                 >
-                  <span style={{ fontSize: 15, color: '#191919' }}>나 → {s.toName}</span>
-                  <span style={{ fontSize: 15, fontWeight: 600, color: COLORS.error }}>
+                  <span style={{ fontSize: 15, color: '#191919', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 8 }}>나 → {s.toName}</span>
+                  <span style={{ fontSize: 15, fontWeight: 600, color: COLORS.error, flexShrink: 0, whiteSpace: 'nowrap' }}>
                     {formatKRW(s.amount)}
                   </span>
                 </div>
@@ -230,8 +230,8 @@ export default function Settle() {
                     borderBottom: '1px solid #f0f0f0',
                   }}
                 >
-                  <span style={{ fontSize: 15, color: '#191919' }}>{s.fromName} → 나</span>
-                  <span style={{ fontSize: 15, fontWeight: 600, color: COLORS.primary }}>
+                  <span style={{ fontSize: 15, color: '#191919', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 8 }}>{s.fromName} → 나</span>
+                  <span style={{ fontSize: 15, fontWeight: 600, color: COLORS.primary, flexShrink: 0, whiteSpace: 'nowrap' }}>
                     +{formatKRW(s.amount)}
                   </span>
                 </div>

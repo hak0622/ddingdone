@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Asset, BottomSheet, ConfirmDialog, FixedBottomCTA, List, ListRow, TextField, Top, useBottomSheet } from '@toss/tds-mobile'
-import { doc, updateDoc, writeBatch, increment, arrayUnion } from 'firebase/firestore'
-import { formatKRW, truncateName } from '../utils/format'
+import { doc, updateDoc, writeBatch, increment, arrayUnion, arrayRemove } from 'firebase/firestore'
+import { formatKRW, truncateName, truncateMemo } from '../utils/format'
 import { COLORS } from '../styles/tokens'
 import { db } from '../lib/firebase'
 import { uploadImage, deleteImage } from '../lib/cloudinary'
@@ -53,6 +53,8 @@ export default function MeetingDetail() {
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
   const [confirmDeleteMeeting, setConfirmDeleteMeeting] = useState(false)
   const [deletingMeeting, setDeletingMeeting] = useState(false)
+  const [confirmLeaveMeeting, setConfirmLeaveMeeting] = useState(false)
+  const [leaving, setLeaving] = useState(false)
   const [actionError, setActionError] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { open: openManageSheet, close: closeManageSheet } = useBottomSheet()
@@ -174,7 +176,39 @@ export default function MeetingDetail() {
     }
   }
 
+  async function handleLeaveMeeting() {
+    if (!id || !uid || leaving) return
+    setLeaving(true)
+    try {
+      const batch = writeBatch(db)
+      batch.delete(doc(db, 'meetings', id, 'members', uid))
+      batch.update(doc(db, 'meetings', id), {
+        memberUids: arrayRemove(uid),
+        memberCount: increment(-1),
+      })
+      await batch.commit()
+      navigate('/')
+    } catch {
+      showActionError('나가지 못했어요. 다시 시도해주세요.')
+    } finally {
+      setLeaving(false)
+    }
+  }
+
+  function handleLeaveClick() {
+    closeManageSheet()
+    // 본인이 추가한 비용이 남아있는 채로 나가면, 그 비용은 totalAmount에는 계속
+    // 반영되면서 1인당 정산 인원수(members 문서 수)에서는 빠져버려 다른 멤버가
+    // 떠안게 된다. 먼저 본인 비용을 직접 지운(이미 가능한 기능) 뒤에만 나가게 한다.
+    if (expenses.some((e) => e.paidBy === uid)) {
+      showActionError('등록한 비용을 먼저 삭제해주세요.')
+      return
+    }
+    setConfirmLeaveMeeting(true)
+  }
+
   function openManage() {
+    const isCreator = uid === meeting?.createdBy
     openManageSheet({
       header: <BottomSheet.Header>관리</BottomSheet.Header>,
       onDimmerClick: closeManageSheet,
@@ -196,7 +230,7 @@ export default function MeetingDetail() {
           >
             방 정보 수정
           </button>
-          {isSettled && (
+          {isCreator && isSettled && (
             <button
               onClick={handleReopenMeeting}
               style={{
@@ -215,7 +249,7 @@ export default function MeetingDetail() {
             </button>
           )}
           <button
-            onClick={() => { closeManageSheet(); setConfirmDeleteMeeting(true) }}
+            onClick={isCreator ? () => { closeManageSheet(); setConfirmDeleteMeeting(true) } : handleLeaveClick}
             style={{
               width: '100%',
               padding: '16px 0',
@@ -227,7 +261,7 @@ export default function MeetingDetail() {
               cursor: 'pointer',
             }}
           >
-            삭제
+            {isCreator ? '삭제' : '나가기'}
           </button>
         </div>
       ),
@@ -488,7 +522,7 @@ export default function MeetingDetail() {
       <Top
         title={<Top.TitleParagraph size={22}>{meeting.name}</Top.TitleParagraph>}
         right={
-          uid === meeting?.createdBy ? (
+          uid === meeting?.createdBy || !isSettled ? (
             <button
               onClick={openManage}
               style={{
@@ -504,23 +538,6 @@ export default function MeetingDetail() {
               }}
             >
               관리
-            </button>
-          ) : !isSettled ? (
-            <button
-              onClick={() => navigate(`/meetings/${id}/edit`)}
-              style={{
-                marginRight: 16,
-                padding: '5px 12px',
-                borderRadius: 20,
-                border: '1px solid #d8d8d8',
-                background: '#fff',
-                color: '#555',
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              수정
             </button>
           ) : undefined
         }
@@ -547,7 +564,7 @@ export default function MeetingDetail() {
             <p style={{ fontSize: 20, fontWeight: 700, color: '#fff', margin: '0 0 3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {meeting.name}
             </p>
-            <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)', margin: 0 }}>
+            <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {meeting.date}{meeting.memo ? ` · ${meeting.memo}` : ''}
             </p>
           </div>
@@ -584,7 +601,7 @@ export default function MeetingDetail() {
             <p style={{ fontSize: 20, fontWeight: 700, color: '#fff', margin: '0 0 3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {meeting.name}
             </p>
-            <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)', margin: 0 }}>
+            <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {meeting.date}{meeting.memo ? ` · ${meeting.memo}` : ''}
             </p>
           </div>
@@ -621,7 +638,7 @@ export default function MeetingDetail() {
             <p style={{ fontSize: 20, fontWeight: 700, color: '#191919', margin: '0 0 3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {meeting.name}
             </p>
-            <p style={{ fontSize: 13, color: '#888', margin: 0 }}>
+            <p style={{ fontSize: 13, color: '#888', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {meeting.date}{meeting.memo ? ` · ${meeting.memo}` : ''}
             </p>
           </div>
@@ -822,7 +839,7 @@ export default function MeetingDetail() {
             <List style={{ margin: '0 -20px', padding: 0, listStyle: 'none' }}>
               {expenses.map((expense) => {
                 const paidByName = expense.paidBy === uid ? '나' : (members[expense.paidBy] ?? expense.paidBy)
-                const displayTitle = expense.memo || expense.category || '지출'
+                const displayTitle = (expense.memo && truncateMemo(expense.memo)) || expense.category || '지출'
                 const emoji = CATEGORY_EMOJI[expense.category] || '💳'
                 const canEdit = !isSettled && expense.paidBy === uid
                 return (
@@ -947,6 +964,28 @@ export default function MeetingDetail() {
         }
         cancelButton={
           <ConfirmDialog.CancelButton onClick={() => setConfirmDeleteMeeting(false)}>
+            취소
+          </ConfirmDialog.CancelButton>
+        }
+      />
+
+      <ConfirmDialog
+        open={confirmLeaveMeeting}
+        title="이 모임에서 나갈까요?"
+        description="나가면 다시 초대 링크를 받아야 들어올 수 있어요."
+        onClose={() => setConfirmLeaveMeeting(false)}
+        confirmButton={
+          <ConfirmDialog.ConfirmButton
+            onClick={() => {
+              setConfirmLeaveMeeting(false)
+              handleLeaveMeeting()
+            }}
+          >
+            나가기
+          </ConfirmDialog.ConfirmButton>
+        }
+        cancelButton={
+          <ConfirmDialog.CancelButton onClick={() => setConfirmLeaveMeeting(false)}>
             취소
           </ConfirmDialog.CancelButton>
         }

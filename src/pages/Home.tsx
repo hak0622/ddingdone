@@ -335,9 +335,17 @@ export default function Home() {
                     cursor: 'pointer',
                   }}
                 >
-                  <div>
+                  <div style={{ flex: 1, minWidth: 0, marginRight: 8 }}>
                     <p
-                      style={{ fontSize: 15, fontWeight: 600, margin: '0 0 2px', color: '#191919' }}
+                      style={{
+                        fontSize: 15,
+                        fontWeight: 600,
+                        margin: '0 0 2px',
+                        color: '#191919',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
                     >
                       {m.name}
                     </p>

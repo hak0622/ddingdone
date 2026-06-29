@@ -30,20 +30,45 @@ service cloud.firestore {
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.memberUids == [request.auth.uid];
 
-      // 이미 멤버: 모든 필드 수정 가능 (이름/사진/정산 상태 등)
-      // 아직 멤버가 아님: joinAsNew 모양(memberUids와 memberCount를 정확히 함께
-      // 변경)의 참여 동작만, 정산 전인 방에서만 허용한다. hasOnly+hasAll을 같이
-      // 써서 바뀐 필드 집합이 정확히 {memberUids, memberCount} 둘 다여야 하게
-      // 막는다 — memberUids만 바뀌고 memberCount는 안 바뀌는 것도 통과시키면,
-      // 정산 완료된 방에도 누구나 memberUids에 자기 자신을 슬쩍 추가해 1인당
-      // 금액 계산에 끼어들 수 있다(이전엔 claimPreMember의 1:1 자리 교체만
-      // 예외로 허용하려던 의도였는데, pre_ 기능 제거로 그 예외를 정당화할
-      // 이유가 없어졌다).
+      // 이미 멤버: 이름/사진/메모/정산 상태/totalAmount 등은 자유롭게 수정 가능하지만
+      // createdBy·memberUids·memberCount는 건드릴 수 없다 — 이 셋은 아래 참여(join)·
+      // 나가기(leave) 두 동작에서만, 그것도 본인 자신의 자리에 대해서만 바뀔 수 있다.
+      // 이 제한이 없으면 일반 멤버가 createdBy를 본인으로 바꿔 방장 권한(통째 삭제
+      // 등)을 탈취하거나, memberUids에서 다른 멤버를 마음대로 빼서 쫓아낼 수 있었다.
+      //
+      // 참여(join): 아직 멤버가 아닌 사람이 정산 전인 방에서 본인만 memberUids에
+      // 추가하고 memberCount를 같이 올린다. hasAll(기존 원소가 결과에 다 남아있는지)
+      // + size()가 정확히 +1인지를 같이 검증해 "정확히 본인 uid 하나만" 추가됐는지까지
+      // 확인한다 — 그냥 uid가 결과에 포함되는지만 보면, 참여하면서 동시에 전혀
+      // 관계없는 다른 uid를 같이 끼워넣어도 통과해버린다.
+      //
+      // 나가기(leave): 이미 멤버인 사람이 정산 전인 방에서 본인만 memberUids에서
+      // 빼고 memberCount를 같이 내린다. 방장은 위임 기능이 없으므로 나가기 대신
+      // 통째 삭제만 가능하다. hasAll(결과 원소가 전부 기존에 있었는지) + size()가
+      // 정확히 -1인지를 같이 검증해 "정확히 본인 uid 하나만" 빠졌는지 확인한다 —
+      // 그냥 본인이 결과에서 빠졌는지만 보면, 나가면서 동시에 다른 멤버까지 같이
+      // 쫓아내도 통과해버린다.
       allow update: if isAuthenticated() && (
-        request.auth.uid in resource.data.memberUids ||
+        (
+          request.auth.uid in resource.data.memberUids &&
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['createdBy', 'memberUids', 'memberCount'])
+        ) ||
         (
           resource.data.status != 'settled' &&
+          !(request.auth.uid in resource.data.memberUids) &&
           request.auth.uid in request.resource.data.memberUids &&
+          request.resource.data.memberUids.hasAll(resource.data.memberUids) &&
+          request.resource.data.memberUids.size() == resource.data.memberUids.size() + 1 &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids', 'memberCount']) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasAll(['memberUids', 'memberCount'])
+        ) ||
+        (
+          resource.data.status != 'settled' &&
+          resource.data.createdBy != request.auth.uid &&
+          request.auth.uid in resource.data.memberUids &&
+          !(request.auth.uid in request.resource.data.memberUids) &&
+          resource.data.memberUids.hasAll(request.resource.data.memberUids) &&
+          request.resource.data.memberUids.size() == resource.data.memberUids.size() - 1 &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids', 'memberCount']) &&
           request.resource.data.diff(resource.data).affectedKeys().hasAll(['memberUids', 'memberCount'])
         )
@@ -60,12 +85,19 @@ service cloud.firestore {
         // perPerson은 memberUids가 아니라 members 서브컬렉션 문서 수로 계산되기 때문.
         // joinAsNew는 멤버 추가와 같은 배치이므로 isMember의 getAfter 분기로 정상 통과한다.
         allow create, update: if isAuthenticated() && isMember(meetingId) && memberId == request.auth.uid;
-        // 본인 문서 삭제, 모임 생성자의 전체 삭제만 허용한다. 이미 활동 중인 실제
-        // 멤버 문서는 본인이나 생성자가 아니면 그 누구도 지울 수 없다 — 그걸
-        // 허용하면 전혀 모르는 사람이 남의 자리를 가져갈 수 있게 되기 때문이다.
+        // 모임 생성자의 전체 삭제(handleDeleteMeeting), 또는 본인이 나가기
+        // (leaveMeeting)일 때만 허용한다. 본인 삭제는 같은 배치에서 meetings
+        // 문서의 memberUids도 같이 빠지는 경우에만 허용한다 — memberUids는 그대로
+        // 둔 채 본인 members 문서만 단독으로 지우면, isMember() 통과는 유지하면서
+        // (여전히 지출 추가 가능) perPerson 분모(members 문서 수)에서만 빠지는
+        // 식으로 정산 부담을 다른 멤버에게 떠넘길 수 있기 때문이다.
         allow delete: if isAuthenticated() && (
-          memberId == request.auth.uid ||
-          get(/databases/$(database)/documents/meetings/$(meetingId)).data.createdBy == request.auth.uid
+          get(/databases/$(database)/documents/meetings/$(meetingId)).data.createdBy == request.auth.uid ||
+          (
+            memberId == request.auth.uid &&
+            existsAfter(/databases/$(database)/documents/meetings/$(meetingId)) &&
+            !(request.auth.uid in getAfter(/databases/$(database)/documents/meetings/$(meetingId)).data.memberUids)
+          )
         );
       }
 

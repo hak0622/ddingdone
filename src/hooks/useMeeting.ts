@@ -31,6 +31,7 @@ interface MeetingState {
   expenses: Expense[]
   meetingReady: boolean
   membersReady: boolean
+  expensesReady: boolean
   error: boolean
 }
 
@@ -50,10 +51,10 @@ const GRACE_PERIOD_MS = 30_000
 const cache = new Map<string, CacheEntry>()
 
 function emptyState(): MeetingState {
-  return { meeting: null, members: {}, expenses: [], meetingReady: false, membersReady: false, error: false }
+  return { meeting: null, members: {}, expenses: [], meetingReady: false, membersReady: false, expensesReady: false, error: false }
 }
 
-const IDLE_STATE: MeetingState = { meeting: null, members: {}, expenses: [], meetingReady: true, membersReady: true, error: false }
+const IDLE_STATE: MeetingState = { meeting: null, members: {}, expenses: [], meetingReady: true, membersReady: true, expensesReady: true, error: false }
 
 function notify(entry: CacheEntry) {
   entry.listeners.forEach((l) => l())
@@ -115,11 +116,11 @@ function startListening(meetingId: string, entry: CacheEntry) {
           category: data.category ?? '',
         })
       })
-      entry.state = { ...entry.state, expenses: list }
+      entry.state = { ...entry.state, expenses: list, expensesReady: true }
       notify(entry)
     },
     () => {
-      entry.state = { ...entry.state, error: true }
+      entry.state = { ...entry.state, error: true, expensesReady: true }
       notify(entry)
     },
   )
@@ -174,6 +175,7 @@ export function useMeeting(meetingId: string | undefined) {
     members: state.members,
     expenses: state.expenses,
     loading: !state.meetingReady || !state.membersReady,
+    expensesReady: state.expensesReady,
     error: state.error,
   }
 }

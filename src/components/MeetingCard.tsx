@@ -69,6 +69,8 @@ export default function MeetingCard({ meeting, onClick }: Props) {
               fontWeight: 700,
               margin: 0,
               color: '#191919',
+              flex: 1,
+              minWidth: 0,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
