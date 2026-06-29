@@ -37,13 +37,19 @@ export default function ExpenseInput() {
   // paidBy는 항상 본인이라 비교 대상에서 제외한다 — 다른 사람 비용을 대신
   // 추가/수정할 수 없게 하라는 실제 사용자 피드백에 따라 결제자 선택 UI를 없앴다.
   const originalRef = useRef({ category: '', memo: '' })
+  // expenses는 다른 멤버가 아무 비용이나 추가/수정/삭제할 때마다 새 배열로
+  // 갱신된다. 한 번 폼에 채워 넣은 뒤에는 다시 채우면 안 된다 — 안 그러면
+  // 수정 중인 화면에서 남이 다른 비용을 건드릴 때마다 입력 중인 값이
+  // 원래 저장된 값으로 되돌아가 버린다.
+  const seededRef = useRef(false)
 
   useEffect(() => {
     if (!loading && meeting?.status === 'settled') navigate(-1)
   }, [loading, meeting])
 
   useEffect(() => {
-    if (!editId || !expensesReady) return
+    if (!editId || !expensesReady || seededRef.current) return
+    seededRef.current = true
     const target = expenses.find((e) => e.id === editId)
     // 존재하지 않거나 본인 비용이 아니면(다른 사람 비용 수정 링크에 직접
     // 들어온 경우 포함) 막는다 — 본인 비용만 수정할 수 있다.
