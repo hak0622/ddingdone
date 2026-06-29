@@ -5,6 +5,21 @@ export interface UploadedImage {
   publicId: string
 }
 
+/**
+ * Cloudinary URL의 `/upload/` 바로 뒤에 변환 파라미터를 끼워 넣어, 지정한
+ * 크기로 줄인 썸네일 URL을 반환한다. 같은 파라미터로 처음 요청될 때만 변환이
+ * 일어나고 그 결과가 캐시되므로, 이후 조회는 변환 비용 없이 작아진 사진만
+ * 받아온다 — 홈 목록처럼 작게 보여줄 곳에서 원본 전체를 그대로 받아오던
+ * 낭비(Bandwidth 크레딧)를 줄인다.
+ */
+export function cloudinaryThumbnail(url: string, size: number): string {
+  const marker = '/upload/'
+  const index = url.indexOf(marker)
+  if (index === -1) return url
+  const insertAt = index + marker.length
+  return `${url.slice(0, insertAt)}w_${size},h_${size},c_fill,g_auto,q_auto,f_auto/${url.slice(insertAt)}`
+}
+
 const MAX_DIMENSION = 1600
 const JPEG_QUALITY = 0.82
 

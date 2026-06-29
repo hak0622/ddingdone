@@ -1,4 +1,5 @@
 import type { MeetingListItem } from '../hooks/useMeetings'
+import { cloudinaryThumbnail } from '../lib/cloudinary'
 
 interface Props {
   meeting: MeetingListItem
@@ -41,7 +42,7 @@ export default function MeetingCard({ meeting, onClick }: Props) {
       >
         {meeting.photoUrl ? (
           <img
-            src={meeting.photoUrl}
+            src={cloudinaryThumbnail(meeting.photoUrl, 150)}
             alt=""
             loading="lazy"
             style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}

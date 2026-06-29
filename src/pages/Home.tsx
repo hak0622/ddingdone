@@ -4,6 +4,7 @@ import { Asset, Top } from '@toss/tds-mobile'
 import { useUserStore } from '../store/userStore'
 import { useMeetings } from '../hooks/useMeetings'
 import type { MeetingListItem } from '../hooks/useMeetings'
+import { cloudinaryThumbnail } from '../lib/cloudinary'
 
 const WEEK_DAYS = ['월', '화', '수', '목', '금', '토', '일']
 
@@ -247,7 +248,7 @@ export default function Home() {
                     <>
                       {dayMeetings[0].photoUrl ? (
                         <img
-                          src={dayMeetings[0].photoUrl}
+                          src={cloudinaryThumbnail(dayMeetings[0].photoUrl, 150)}
                           alt=""
                           loading="lazy"
                           style={{
