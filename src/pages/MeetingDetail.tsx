@@ -5,7 +5,7 @@ import { doc, updateDoc, writeBatch, increment, arrayUnion, arrayRemove } from '
 import { formatKRW, truncateName } from '../utils/format'
 import { COLORS } from '../styles/tokens'
 import { db } from '../lib/firebase'
-import { uploadImage, deleteImage } from '../lib/cloudinary'
+import { uploadImage, deleteImage, cloudinaryThumbnail } from '../lib/cloudinary'
 import { shareInviteLink } from '../lib/bridge'
 import { useMeeting, type Expense } from '../hooks/useMeeting'
 import { useUserStore } from '../store/userStore'
@@ -36,6 +36,7 @@ function CameraIcon({ color = '#aaa' }: { color?: string }) {
 
 const OVERLAY_GRADIENT = 'linear-gradient(to bottom, transparent 25%, rgba(0,0,0,0.72) 100%)'
 const MEMBER_CHIP_LIMIT = 3
+const HERO_PHOTO_SIZE = 800
 
 export default function MeetingDetail() {
   const { id } = useParams<{ id: string }>()
@@ -607,7 +608,7 @@ export default function MeetingDetail() {
       ) : meeting.photoUrl ? (
         <div style={{ position: 'relative', width: '100%', aspectRatio: '1 / 1' }}>
           <img
-            src={meeting.photoUrl}
+            src={cloudinaryThumbnail(meeting.photoUrl, HERO_PHOTO_SIZE)}
             alt="대표 사진"
             style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
           />
