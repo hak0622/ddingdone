@@ -2,12 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Asset, BottomSheet, ConfirmDialog, FixedBottomCTA, List, ListRow, TextField, Top, useBottomSheet } from '@toss/tds-mobile'
 import { doc, updateDoc, writeBatch, increment, arrayUnion, arrayRemove } from 'firebase/firestore'
-import { formatKRW, truncateName, truncateMemo } from '../utils/format'
+import { formatKRW, truncateName } from '../utils/format'
 import { COLORS } from '../styles/tokens'
 import { db } from '../lib/firebase'
 import { uploadImage, deleteImage } from '../lib/cloudinary'
 import { shareInviteLink } from '../lib/bridge'
-import { useMeeting } from '../hooks/useMeeting'
+import { useMeeting, type Expense } from '../hooks/useMeeting'
 import { useUserStore } from '../store/userStore'
 import ResultScreen from '../components/ResultScreen'
 
@@ -59,6 +59,7 @@ export default function MeetingDetail() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { open: openManageSheet, close: closeManageSheet } = useBottomSheet()
   const { open: openMembersSheet, close: closeMembersSheet } = useBottomSheet()
+  const { open: openExpenseSheet, close: closeExpenseSheet } = useBottomSheet()
   const isSettled = meeting?.status === 'settled'
 
   useEffect(() => {
@@ -517,6 +518,25 @@ export default function MeetingDetail() {
     })
   }
 
+  function openExpenseDetail(expense: Expense) {
+    openExpenseSheet({
+      header: (
+        <>
+          <BottomSheet.Header>메모</BottomSheet.Header>
+          <BottomSheet.HeaderDescription>
+            <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#888', marginBottom: 8 }}>
+              내용
+            </span>
+            <span style={{ display: 'block', fontSize: 15, color: '#191919', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {expense.memo || '메모가 없어요'}
+            </span>
+          </BottomSheet.HeaderDescription>
+        </>
+      ),
+      onDimmerClick: closeExpenseSheet,
+    })
+  }
+
   return (
     <>
       <Top
@@ -839,28 +859,21 @@ export default function MeetingDetail() {
             <List style={{ margin: '0 -20px', padding: 0, listStyle: 'none' }}>
               {expenses.map((expense) => {
                 const paidByName = expense.paidBy === uid ? '나' : (members[expense.paidBy] ?? expense.paidBy)
-                const displayTitle = (expense.memo && truncateMemo(expense.memo)) || expense.category || '지출'
                 const emoji = CATEGORY_EMOJI[expense.category] || '💳'
                 const canEdit = !isSettled && expense.paidBy === uid
                 return (
                   <ListRow
                     key={expense.id}
                     border="indented"
+                    onClick={() => openExpenseDetail(expense)}
+                    style={{ cursor: 'pointer' }}
                     left={
                       <ListRow.AssetText shape="squircle" size="small">
                         {emoji}
                       </ListRow.AssetText>
                     }
                     contents={
-                      <ListRow.Texts
-                        type="2RowTypeA"
-                        top={
-                          <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {displayTitle}
-                          </span>
-                        }
-                        bottom={`${paidByName} 납부`}
-                      />
+                      <ListRow.Texts type="1RowTypeA" top={`${paidByName} 납부`} />
                     }
                     right={
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -870,7 +883,10 @@ export default function MeetingDetail() {
                         {canEdit && (
                           <>
                             <button
-                              onClick={() => navigate(`/meetings/${id}/expense?editId=${expense.id}`)}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                navigate(`/meetings/${id}/expense?editId=${expense.id}`)
+                              }}
                               style={{
                                 padding: '4px 10px',
                                 borderRadius: 20,
@@ -886,7 +902,10 @@ export default function MeetingDetail() {
                               수정
                             </button>
                             <button
-                              onClick={() => setDeleteTargetId(expense.id)}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setDeleteTargetId(expense.id)
+                              }}
                               style={{
                                 padding: '4px 10px',
                                 borderRadius: 20,

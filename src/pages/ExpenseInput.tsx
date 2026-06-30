@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { Top } from '@toss/tds-mobile'
+import { Asset, Top, Tooltip } from '@toss/tds-mobile'
 import { collection, doc, serverTimestamp, increment, writeBatch } from 'firebase/firestore'
 import { db } from '../lib/firebase'
 import { useMeeting } from '../hooks/useMeeting'
@@ -28,6 +28,7 @@ export default function ExpenseInput() {
   const [amount, setAmount] = useState('')
   const [category, setCategory] = useState('')
   const [memo, setMemo] = useState('')
+  const [showMemoHint, setShowMemoHint] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [originalAmount, setOriginalAmount] = useState(0)
@@ -193,14 +194,35 @@ export default function ExpenseInput() {
 
         {/* 메모 */}
         <div style={{ marginBottom: 20 }}>
-          <p style={{ fontSize: 13, fontWeight: 600, color: '#888', margin: '0 0 8px' }}>
-            메모 <span style={{ fontWeight: 400 }}>(선택)</span>
-          </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, margin: '0 0 8px' }}>
+            <p style={{ fontSize: 13, fontWeight: 600, color: '#888', margin: 0 }}>메모</p>
+            <Tooltip
+              open={showMemoHint}
+              onOpenChange={setShowMemoHint}
+              dismissible
+              placement="bottom"
+              message={<span style={{ fontWeight: 400 }}>비용 항목을 탭하면 메모를 볼 수 있어요</span>}
+            >
+              <button
+                type="button"
+                onClick={() => setShowMemoHint((v) => !v)}
+                style={{ display: 'flex', padding: 0, border: 'none', background: 'transparent', cursor: 'pointer' }}
+              >
+                <Asset.Icon
+                  frameShape={Asset.frameShape.CleanW16}
+                  backgroundColor="transparent"
+                  name="icon-info-circle-lightgrey"
+                  aria-hidden={true}
+                  ratio="1/1"
+                />
+              </button>
+            </Tooltip>
+          </div>
           <input
             value={memo}
             onChange={(e) => setMemo(e.target.value)}
             placeholder="예: 저녁 삼겹살"
-            maxLength={9}
+            maxLength={25}
             style={{
               width: '100%',
               padding: '12px 14px',
