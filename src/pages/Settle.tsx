@@ -40,8 +40,9 @@ export default function Settle() {
     if (!meeting) return
     const lines = [
       `[띵돈] ${meeting.name} 정산 결과`,
-      `📅 ${meeting.date}`,
-      `💰 총 지출 ${totalAmount.toLocaleString('ko-KR')}원 · 1인당 ${perPerson.toLocaleString('ko-KR')}원`,
+      `날짜 : ${meeting.date}`,
+      `총 지출 : ${totalAmount.toLocaleString('ko-KR')}원`,
+      `1인당 : ${perPerson.toLocaleString('ko-KR')}원`,
       '',
       ...settlements.map(
         (s) => `${s.fromName} → ${s.toName}: ${s.amount.toLocaleString('ko-KR')}원`,

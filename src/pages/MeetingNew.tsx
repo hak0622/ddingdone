@@ -6,6 +6,7 @@ import { collection, doc, serverTimestamp, writeBatch } from 'firebase/firestore
 import { db } from '../lib/firebase'
 import { useUserStore } from '../store/userStore'
 import ResultScreen from '../components/ResultScreen'
+import { shareInviteLink } from '../lib/bridge'
 
 function getTodayString(): string {
   const d = new Date()
@@ -77,6 +78,10 @@ export default function MeetingNew() {
       <ResultScreen
         title={`${name.trim()}을 만들었어요!`}
         subtitle="친구들을 초대하고 비용을 함께 기록해보세요"
+        onInvite={async () => {
+          try { await shareInviteLink(createdId) } catch { /* 공유 취소 무시 */ }
+          navigate(`/meetings/${createdId}`)
+        }}
         onConfirm={() => navigate(`/meetings/${createdId}`)}
       />
     )

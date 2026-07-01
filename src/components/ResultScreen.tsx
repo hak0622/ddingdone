@@ -4,9 +4,10 @@ interface Props {
   title: string
   subtitle?: string
   onConfirm: () => void
+  onInvite?: () => void
 }
 
-export default function ResultScreen({ title, subtitle, onConfirm }: Props) {
+export default function ResultScreen({ title, subtitle, onConfirm, onInvite }: Props) {
   return (
     <>
       <Top title={<Top.TitleParagraph size={22}> </Top.TitleParagraph>} />
@@ -69,7 +70,58 @@ export default function ResultScreen({ title, subtitle, onConfirm }: Props) {
           </p>
         )}
       </div>
-      <FixedBottomCTA onClick={onConfirm}>확인했어요</FixedBottomCTA>
+      {onInvite ? (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 8,
+            padding: '12px 20px',
+            paddingBottom: 'calc(12px + env(safe-area-inset-bottom))',
+            background: '#fff',
+          }}
+        >
+          <button
+            onClick={onInvite}
+            style={{
+              width: '100%',
+              height: 52,
+              background: '#3182F6',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 12,
+              fontSize: 16,
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            지금 초대하기
+          </button>
+          <button
+            onClick={onConfirm}
+            style={{
+              width: '100%',
+              height: 52,
+              background: '#f4f4f4',
+              border: 'none',
+              borderRadius: 12,
+              fontSize: 16,
+              fontWeight: 400,
+              color: '#888888',
+              cursor: 'pointer',
+            }}
+          >
+            나중에 할게요
+          </button>
+        </div>
+      ) : (
+        <FixedBottomCTA onClick={onConfirm}>확인했어요</FixedBottomCTA>
+      )}
     </>
   )
 }
