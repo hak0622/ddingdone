@@ -140,6 +140,12 @@ export default function Settings() {
           <Row label="개인정보처리방침" onPress={() => navigate('/privacy')} />
         </div>
 
+        {/* 계정 */}
+        <SectionLabel label="계정" />
+        <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #f0f0f0', padding: '0 16px' }}>
+          <Row label="회원 탈퇴" onPress={() => navigate('/settings/withdrawal')} />
+        </div>
+
       </div>
     </>
   )

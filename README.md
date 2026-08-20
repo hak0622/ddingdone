@@ -58,6 +58,10 @@
 
 Cloudinary 업로드는 클라이언트에서 수행하되, API Secret이 필요한 이미지 삭제는 Cloudflare Worker를 통해 처리합니다. Worker는 Firebase ID 토큰과 해당 모임의 멤버 여부, 이미지 소유 경로를 검증한 뒤 Cloudinary 삭제 API를 호출합니다.
 
+회원 탈퇴 화면에서 탈퇴 Worker를 호출하려면 앱의 `.env.local`에
+`VITE_ACCOUNT_DELETION_WORKER_URL`을 설정합니다. 이 값은 Worker의 공개 주소이며
+Firebase·Cloudinary 비밀키는 앱 환경변수에 넣지 않습니다.
+
 ## 🔄아키텍처
 
 ![띵돈 서비스 아키텍처](ddingdone.png)

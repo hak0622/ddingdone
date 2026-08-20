@@ -17,6 +17,7 @@ import Settle from './pages/Settle'
 import MeetingEdit from './pages/MeetingEdit'
 import TermsOfService from './pages/TermsOfService'
 import PrivacyPolicy from './pages/PrivacyPolicy'
+import AccountDeletion from './pages/AccountDeletion'
 
 const NICKNAME_KEY = 'ddingdone_nickname'
 
@@ -131,6 +132,7 @@ export default function App() {
             <Route path="/" element={<Home />} />
             <Route path="/history" element={<History />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/settings/withdrawal" element={<AccountDeletion />} />
             <Route path="/meetings/new" element={<MeetingNew />} />
             <Route path="/meetings/:id" element={<MeetingDetail />} />
             <Route path="/meetings/:id/edit" element={<MeetingEdit />} />

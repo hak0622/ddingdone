@@ -5,6 +5,14 @@ declare module "*.css" {
   export default content;
 }
 
+interface ImportMetaEnv {
+  readonly VITE_ACCOUNT_DELETION_WORKER_URL?: string
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv
+}
+
 interface Window {
   __GRANITE_NATIVE_EMITTER?: unknown
 }
