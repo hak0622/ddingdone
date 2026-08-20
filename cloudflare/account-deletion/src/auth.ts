@@ -3,7 +3,7 @@ import { base64UrlBytes, base64UrlJson } from './crypto'
 const FIREBASE_LOOKUP_URL = 'https://identitytoolkit.googleapis.com/v1/accounts:lookup'
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const GOOGLE_TOKEN_AUDIENCE = GOOGLE_TOKEN_URL
-const GOOGLE_DATASTORE_SCOPE = 'https://www.googleapis.com/auth/datastore'
+const GOOGLE_CLOUD_SCOPE = 'https://www.googleapis.com/auth/cloud-platform'
 const EXTERNAL_REQUEST_TIMEOUT_MS = 10_000
 
 export class AuthenticationError extends Error {
@@ -72,7 +72,7 @@ export async function createGoogleAccessToken(
     iss: clientEmail,
     sub: clientEmail,
     aud: GOOGLE_TOKEN_AUDIENCE,
-    scope: GOOGLE_DATASTORE_SCOPE,
+    scope: GOOGLE_CLOUD_SCOPE,
     iat: nowSeconds,
     exp: nowSeconds + 3600,
   })
@@ -104,4 +104,31 @@ export async function createGoogleAccessToken(
   const accessToken = readAccessToken(await response.json())
   if (!accessToken) throw new Error('Google access token response is invalid')
   return accessToken
+}
+
+export async function deleteFirebaseUser(
+  projectId: string,
+  uid: string,
+  accessToken: string,
+): Promise<void> {
+  const response = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/accounts:delete`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ localId: uid }),
+      signal: AbortSignal.timeout(EXTERNAL_REQUEST_TIMEOUT_MS),
+    },
+  )
+  // 재시도 시 이미 삭제된 계정도 완료로 간주해야 멱등성이 유지된다.
+  if (response.ok || response.status === 404) {
+    await response.body?.cancel()
+    return
+  }
+  const errorBody = await response.json<{ error?: { message?: string } }>().catch(() => null)
+  if (errorBody?.error?.message?.startsWith('USER_NOT_FOUND')) return
+  throw new Error('Firebase user deletion failed')
 }

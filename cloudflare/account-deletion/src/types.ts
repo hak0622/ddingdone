@@ -84,3 +84,23 @@ export interface WithdrawalPreviewResponse extends WithdrawalPreview {
   confirmationNonce: string
   expiresAt: string
 }
+
+export interface WithdrawalConfirmBody {
+  manifestId: string
+  manifestHash: string
+  confirmationNonce: string
+  successorByMeeting: Record<string, string>
+}
+
+export interface WithdrawalWorkflowParams {
+  requestId: string
+}
+
+export type WithdrawalRequestStatus =
+  | 'queued'
+  | 'locking'
+  | 'processing'
+  | 'finalizing'
+  | 'complete'
+  | 'preview_stale'
+  | 'failed'

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { sha256Hex, stableStringify } from './crypto'
-import { buildWithdrawalPreview } from './preview'
+import { buildWithdrawalPreview, withdrawalSourceHashInput } from './preview'
 import type { FirestoreRecord, MeetingSource } from './types'
 
 const USER_UID = 'user-1'
@@ -36,6 +36,20 @@ function source(overrides: Partial<MeetingSource> = {}): MeetingSource {
 }
 
 describe('buildWithdrawalPreview', () => {
+  it('Workflow 잠금 필드와 Firestore 메타 시간은 원본 해시를 바꾸지 않는다', async () => {
+    const before = source()
+    const after = source({
+      meeting: {
+        ...before.meeting,
+        updateTime: '2026-08-20T00:01:00.000Z',
+        data: { ...before.meeting.data, withdrawalLockRequestId: 'request-1' },
+      },
+    })
+
+    expect(await sha256Hex(withdrawalSourceHashInput([before])))
+      .toBe(await sha256Hex(withdrawalSourceHashInput([after])))
+  })
+
   it('활동 중 공유방에서 탈퇴자가 작성한 비용만 집계한다', async () => {
     const preview = await buildWithdrawalPreview(USER_UID, [source()])
 
@@ -180,5 +194,48 @@ describe('buildWithdrawalPreview', () => {
 
     expect(preview.meetings[0]).toMatchObject({ action: 'manual_review' })
     expect(preview.meetings[0]?.issues).toContain('UNKNOWN_CHILD_COLLECTION')
+  })
+
+  it('이전 탈퇴자가 익명화된 정산방도 현재 사용자 원본만 다시 검증한다', async () => {
+    const core = {
+      schemaVersion: 1,
+      totalAmount: 3500,
+      participantCount: 3,
+      participantIds: [USER_UID, 'withdrawn_abcdef1234567890abcdef12', 'owner-1'],
+      participantNames: {
+        [USER_UID]: '사용자',
+        withdrawn_abcdef1234567890abcdef12: '탈퇴한 사용자',
+        'owner-1': '방장',
+      },
+      participantPaidTotals: {
+        [USER_UID]: 1000,
+        withdrawn_abcdef1234567890abcdef12: 500,
+        'owner-1': 2000,
+      },
+      transfers: [{ from: 'withdrawn_abcdef1234567890abcdef12', to: 'owner-1', amount: 500 }],
+    }
+    const settled = source({
+      meeting: record('settled-anonymized', {
+        name: '익명 참여자가 있는 정산',
+        status: 'settled',
+        createdBy: 'owner-1',
+        memberCount: 2,
+        memberUids: [USER_UID, 'owner-1'],
+        totalAmount: 3500,
+        expenseCount: 2,
+      }),
+      settlement: record('final', {
+        ...core,
+        hash: await sha256Hex(stableStringify(core)),
+        anonymizedParticipantCount: 1,
+      }),
+      childCollectionIds: ['expenses', 'members', 'settlements'],
+    })
+
+    const result = await buildWithdrawalPreview(USER_UID, [settled])
+    expect(result.meetings[0]).toMatchObject({
+      action: 'anonymize_settled_shared',
+      issues: [],
+    })
   })
 })

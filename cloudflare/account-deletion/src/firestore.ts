@@ -1,8 +1,15 @@
-import type { FirestoreRecord, MeetingSource, WithdrawalPreview } from './types'
+import type {
+  FirestoreRecord,
+  MeetingSource,
+  WithdrawalPreview,
+  WithdrawalRequestStatus,
+} from './types'
 
 const MAX_MEETINGS = 100
 const MAX_MEMBERS_PER_MEETING = 500
-const MAX_EXPENSES_PER_MEETING = 5_000
+// 탈퇴자 비용 삭제, 멤버 삭제, 방 갱신, 정산 스냅샷 갱신을 Firestore의
+// 단일 500-write 커밋으로 처리하기 위한 보수적인 상한이다.
+const MAX_EXPENSES_PER_MEETING = 450
 const MAX_CHILD_COLLECTIONS = 100
 const PAGE_SIZE = 300
 const FIRESTORE_API = 'https://firestore.googleapis.com/v1'
@@ -29,6 +36,15 @@ interface FirestoreDocument {
   updateTime?: string
 }
 
+type FirestorePrecondition = { exists: boolean } | { updateTime: string }
+
+type FirestoreWrite = {
+  update?: FirestoreDocument
+  updateMask?: { fieldPaths: string[] }
+  currentDocument?: FirestorePrecondition
+  delete?: string
+}
+
 export class FirestoreError extends Error {
   constructor(readonly code: string) {
     super(code)
@@ -38,6 +54,10 @@ export class FirestoreError extends Error {
 
 function documentBase(projectId: string): string {
   return `${FIRESTORE_API}/projects/${encodeURIComponent(projectId)}/databases/(default)/documents`
+}
+
+function documentName(projectId: string, documentPath: string): string {
+  return `projects/${projectId}/databases/(default)/documents/${documentPath}`
 }
 
 function authorization(accessToken: string): HeadersInit {
@@ -113,6 +133,51 @@ function encodeFields(data: Record<string, unknown>): Record<string, FirestoreVa
     if (value !== undefined) fields[key] = encodeValue(value)
   }
   return fields
+}
+
+function updateWrite(
+  projectId: string,
+  documentPath: string,
+  data: Record<string, unknown>,
+  fieldPaths: string[],
+  currentDocument?: FirestorePrecondition,
+): FirestoreWrite {
+  return {
+    update: { name: documentName(projectId, documentPath), fields: encodeFields(data) },
+    updateMask: { fieldPaths },
+    ...(currentDocument ? { currentDocument } : {}),
+  }
+}
+
+function deleteWrite(
+  projectId: string,
+  documentPath: string,
+  currentDocument?: FirestorePrecondition,
+): FirestoreWrite {
+  return {
+    delete: documentName(projectId, documentPath),
+    ...(currentDocument ? { currentDocument } : {}),
+  }
+}
+
+async function commitWrites(
+  projectId: string,
+  accessToken: string,
+  writes: FirestoreWrite[],
+  errorCode: string,
+): Promise<void> {
+  if (writes.length === 0) return
+  const response = await fetch(
+    `${FIRESTORE_API}/projects/${encodeURIComponent(projectId)}/databases/(default)/documents:commit`,
+    {
+      method: 'POST',
+      headers: { ...authorization(accessToken), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ writes }),
+      signal: requestSignal(),
+    },
+  )
+  if (!response.ok) throw new FirestoreError(errorCode)
+  await response.body?.cancel()
 }
 
 function asRunQueryDocuments(value: unknown): FirestoreRecord[] {
@@ -196,6 +261,14 @@ async function getDocument(
   return decodeDocument(json as FirestoreDocument)
 }
 
+export async function getFirestoreDocument(
+  projectId: string,
+  documentPath: string,
+  accessToken: string,
+): Promise<FirestoreRecord | null> {
+  return getDocument(projectId, documentPath, accessToken)
+}
+
 async function listChildCollectionIds(
   projectId: string,
   documentPath: string,
@@ -247,16 +320,30 @@ export async function loadMeetingSources(
   accessToken: string,
 ): Promise<MeetingSource[]> {
   const meetings = await queryMeetings(projectId, uid, accessToken)
-  return mapWithConcurrency(meetings, 5, async (meeting) => {
-    const parentPath = `meetings/${encodeURIComponent(meeting.id)}`
-    const [members, expenses, settlement, childCollectionIds] = await Promise.all([
-      listDocuments(projectId, parentPath, 'members', accessToken, MAX_MEMBERS_PER_MEETING),
-      listDocuments(projectId, parentPath, 'expenses', accessToken, MAX_EXPENSES_PER_MEETING),
-      getDocument(projectId, `${parentPath}/settlements/final`, accessToken),
-      listChildCollectionIds(projectId, parentPath, accessToken),
-    ])
-    return { meeting, members, expenses, settlement, childCollectionIds }
-  })
+  return mapWithConcurrency(meetings, 5, (meeting) =>
+    loadMeetingSource(projectId, meeting.id, accessToken, meeting))
+}
+
+export async function loadMeetingSource(
+  projectId: string,
+  meetingId: string,
+  accessToken: string,
+  knownMeeting?: FirestoreRecord,
+): Promise<MeetingSource> {
+  const meeting = knownMeeting ?? await getDocument(
+    projectId,
+    `meetings/${encodeURIComponent(meetingId)}`,
+    accessToken,
+  )
+  if (!meeting) throw new FirestoreError('MEETING_NOT_FOUND')
+  const parentPath = `meetings/${encodeURIComponent(meeting.id)}`
+  const [members, expenses, settlement, childCollectionIds] = await Promise.all([
+    listDocuments(projectId, parentPath, 'members', accessToken, MAX_MEMBERS_PER_MEETING),
+    listDocuments(projectId, parentPath, 'expenses', accessToken, MAX_EXPENSES_PER_MEETING),
+    getDocument(projectId, `${parentPath}/settlements/final`, accessToken),
+    listChildCollectionIds(projectId, parentPath, accessToken),
+  ])
+  return { meeting, members, expenses, settlement, childCollectionIds }
 }
 
 export async function createWithdrawalManifest(
@@ -294,4 +381,287 @@ export async function createWithdrawalManifest(
   })
   if (!response.ok) throw new FirestoreError('MANIFEST_CREATE_FAILED')
   await response.body?.cancel()
+}
+
+export async function claimWithdrawalRequest(
+  projectId: string,
+  accessToken: string,
+  input: {
+    manifest: FirestoreRecord
+    uid: string
+    requestId: string
+    statusTokenHash: string
+    successorByMeeting: Record<string, string>
+    now: Date
+  },
+): Promise<void> {
+  if (!input.manifest.updateTime) throw new FirestoreError('INVALID_MANIFEST_VERSION')
+  const requestPath = `withdrawalRequests/${input.requestId}`
+  const lockPath = `withdrawalLocks/${input.uid}`
+  const manifestPath = `withdrawalManifests/${input.manifest.id}`
+  await commitWrites(projectId, accessToken, [
+    updateWrite(projectId, manifestPath, {
+      status: 'queued',
+      requestId: input.requestId,
+      claimedAt: input.now,
+    }, ['status', 'requestId', 'claimedAt'], { updateTime: input.manifest.updateTime }),
+    updateWrite(projectId, requestPath, {
+      schemaVersion: 1,
+      uid: input.uid,
+      manifestId: input.manifest.id,
+      manifestHash: input.manifest.data.manifestHash,
+      sourceHash: input.manifest.data.sourceHash,
+      preview: input.manifest.data.preview,
+      successorByMeeting: input.successorByMeeting,
+      statusTokenHash: input.statusTokenHash,
+      status: 'queued',
+      stage: 'queued',
+      createdAt: input.now,
+      updatedAt: input.now,
+      expiresAt: new Date(input.now.getTime() + 30 * 24 * 60 * 60 * 1000),
+    }, [
+      'schemaVersion', 'uid', 'manifestId', 'manifestHash', 'sourceHash', 'preview',
+      'successorByMeeting', 'statusTokenHash', 'status', 'stage', 'createdAt', 'updatedAt', 'expiresAt',
+    ], { exists: false }),
+    updateWrite(projectId, lockPath, {
+      requestId: input.requestId,
+      status: 'queued',
+      createdAt: input.now,
+      updatedAt: input.now,
+    }, ['requestId', 'status', 'createdAt', 'updatedAt'], { exists: false }),
+  ], 'WITHDRAWAL_CLAIM_FAILED')
+}
+
+export async function updateWithdrawalRequestStatus(
+  projectId: string,
+  accessToken: string,
+  requestId: string,
+  status: WithdrawalRequestStatus,
+  stage: string,
+  extra: Record<string, unknown> = {},
+): Promise<void> {
+  const now = new Date()
+  const data = { status, stage, updatedAt: now, ...extra }
+  await commitWrites(projectId, accessToken, [
+    updateWrite(
+      projectId,
+      `withdrawalRequests/${requestId}`,
+      data,
+      Object.keys(data),
+      { exists: true },
+    ),
+  ], 'REQUEST_STATUS_UPDATE_FAILED')
+}
+
+export async function setWithdrawalLockStatus(
+  projectId: string,
+  accessToken: string,
+  uid: string,
+  requestId: string,
+  status: string,
+): Promise<void> {
+  await commitWrites(projectId, accessToken, [
+    updateWrite(projectId, `withdrawalLocks/${uid}`, {
+      requestId,
+      status,
+      updatedAt: new Date(),
+    }, ['requestId', 'status', 'updatedAt'], { exists: true }),
+  ], 'ACCOUNT_LOCK_UPDATE_FAILED')
+}
+
+export async function lockMeetings(
+  projectId: string,
+  accessToken: string,
+  requestId: string,
+  meetingIds: string[],
+): Promise<void> {
+  const meetings = await Promise.all(meetingIds.map((meetingId) =>
+    getDocument(projectId, `meetings/${encodeURIComponent(meetingId)}`, accessToken)))
+  const writes: FirestoreWrite[] = []
+  for (let index = 0; index < meetingIds.length; index += 1) {
+    const meetingId = meetingIds[index]
+    const meeting = meetings[index]
+    if (!meetingId || !meeting?.updateTime) throw new FirestoreError('MEETING_NOT_FOUND')
+    const existingLock = meeting.data.withdrawalLockRequestId
+    if (existingLock === requestId) continue
+    if (existingLock !== undefined && existingLock !== null) {
+      throw new FirestoreError('MEETING_ALREADY_LOCKED')
+    }
+    writes.push(updateWrite(
+      projectId,
+      `meetings/${meetingId}`,
+      { withdrawalLockRequestId: requestId },
+      ['withdrawalLockRequestId'],
+      { updateTime: meeting.updateTime },
+    ))
+  }
+  await commitWrites(projectId, accessToken, writes, 'MEETING_LOCK_FAILED')
+}
+
+export async function releaseWithdrawalLocks(
+  projectId: string,
+  accessToken: string,
+  uid: string,
+  requestId: string,
+  meetingIds: string[],
+): Promise<void> {
+  const meetings = await Promise.all(meetingIds.map((meetingId) =>
+    getDocument(projectId, `meetings/${encodeURIComponent(meetingId)}`, accessToken)))
+  const accountLock = await getDocument(
+    projectId,
+    `withdrawalLocks/${encodeURIComponent(uid)}`,
+    accessToken,
+  )
+  const writes: FirestoreWrite[] = []
+  for (let index = 0; index < meetingIds.length; index += 1) {
+    const meetingId = meetingIds[index]
+    const meeting = meetings[index]
+    if (meetingId && meeting?.updateTime && meeting.data.withdrawalLockRequestId === requestId) {
+      writes.push(updateWrite(
+        projectId,
+        `meetings/${meetingId}`,
+        {},
+        ['withdrawalLockRequestId'],
+        { updateTime: meeting.updateTime },
+      ))
+    }
+  }
+  if (accountLock?.updateTime && accountLock.data.requestId === requestId) {
+    writes.push(deleteWrite(
+      projectId,
+      `withdrawalLocks/${uid}`,
+      { updateTime: accountLock.updateTime },
+    ))
+  }
+  await commitWrites(projectId, accessToken, writes, 'LOCK_RELEASE_FAILED')
+}
+
+export async function markWorkflowCreationFailed(
+  projectId: string,
+  accessToken: string,
+  uid: string,
+  requestId: string,
+  manifestId: string,
+): Promise<void> {
+  await updateWithdrawalRequestStatus(
+    projectId,
+    accessToken,
+    requestId,
+    'failed',
+    'workflow-create-failed',
+    { errorCode: 'WORKFLOW_CREATE_FAILED' },
+  )
+  await releaseWithdrawalLocks(projectId, accessToken, uid, requestId, [])
+  await commitWrites(projectId, accessToken, [
+    updateWrite(projectId, `withdrawalManifests/${manifestId}`, {
+      status: 'previewed',
+    }, ['status'], { exists: true }),
+  ], 'MANIFEST_RESET_FAILED')
+}
+
+function expenseAuthor(expense: FirestoreRecord): string | null {
+  const createdBy = expense.data.createdBy
+  if (typeof createdBy === 'string') return createdBy
+  return typeof expense.data.paidBy === 'string' ? expense.data.paidBy : null
+}
+
+export async function processSharedMemberDeparture(
+  projectId: string,
+  accessToken: string,
+  uid: string,
+  requestId: string,
+  source: MeetingSource,
+  anonymizedSnapshot: Record<string, unknown> | null,
+): Promise<{ deletedExpenseCount: number }> {
+  const meetingId = source.meeting.id
+  const memberUids = Array.isArray(source.meeting.data.memberUids)
+    ? source.meeting.data.memberUids.filter((value): value is string => typeof value === 'string')
+    : []
+  const alreadyProcessed = !memberUids.includes(uid)
+  if (alreadyProcessed) return { deletedExpenseCount: 0 }
+  if (source.meeting.data.withdrawalLockRequestId !== requestId) {
+    throw new FirestoreError('MEETING_LOCK_LOST')
+  }
+
+  const ownedExpenses = source.expenses.filter((expense) => expenseAuthor(expense) === uid)
+  const remainingExpenses = source.expenses.filter((expense) => expenseAuthor(expense) !== uid)
+  const status = source.meeting.data.status === 'settled' ? 'settled' : 'active'
+  const totalAmount = status === 'settled'
+    ? source.meeting.data.totalAmount
+    : remainingExpenses.reduce((sum, expense) => {
+        const amount = expense.data.amount
+        return sum + (typeof amount === 'number' && Number.isFinite(amount) ? amount : 0)
+      }, 0)
+  const remainingMemberUids = memberUids.filter((memberUid) => memberUid !== uid)
+  const meetingData: Record<string, unknown> = {
+    memberUids: remainingMemberUids,
+    memberCount: remainingMemberUids.length,
+    expenseCount: remainingExpenses.length,
+    totalAmount,
+  }
+  const meetingFields = [
+    'memberUids',
+    'memberCount',
+    'expenseCount',
+    'totalAmount',
+    'withdrawalLockRequestId',
+  ]
+  if (source.meeting.data.photoUploadedBy === uid) {
+    meetingData.photoUploadedBy = null
+    meetingFields.push('photoUploadedBy')
+  }
+  const member = source.members.find((candidate) => candidate.id === uid)
+  if (!member) throw new FirestoreError('MEMBER_NOT_FOUND')
+  const writes: FirestoreWrite[] = [
+    ...ownedExpenses.map((expense) => deleteWrite(
+      projectId,
+      `meetings/${meetingId}/expenses/${expense.id}`,
+      expense.updateTime ? { updateTime: expense.updateTime } : { exists: true },
+    )),
+    deleteWrite(
+      projectId,
+      `meetings/${meetingId}/members/${uid}`,
+      member.updateTime ? { updateTime: member.updateTime } : { exists: true },
+    ),
+    updateWrite(
+      projectId,
+      `meetings/${meetingId}`,
+      meetingData,
+      meetingFields,
+      source.meeting.updateTime ? { updateTime: source.meeting.updateTime } : { exists: true },
+    ),
+  ]
+  if (status === 'settled') {
+    if (!anonymizedSnapshot) throw new FirestoreError('ANONYMIZED_SNAPSHOT_REQUIRED')
+    writes.push(updateWrite(
+      projectId,
+      `meetings/${meetingId}/settlements/final`,
+      anonymizedSnapshot,
+      Object.keys(anonymizedSnapshot),
+      source.settlement?.updateTime ? { updateTime: source.settlement.updateTime } : { exists: true },
+    ))
+  }
+  await commitWrites(projectId, accessToken, writes, 'MEETING_DEPARTURE_FAILED')
+  return { deletedExpenseCount: ownedExpenses.length }
+}
+
+export async function finalizeWithdrawalMetadata(
+  projectId: string,
+  accessToken: string,
+  uid: string,
+  requestId: string,
+  manifestId: string,
+): Promise<void> {
+  const now = new Date()
+  await commitWrites(projectId, accessToken, [
+    // updateMask에 uid를 포함하고 fields에서는 생략하면 해당 필드만 삭제된다.
+    updateWrite(projectId, `withdrawalRequests/${requestId}`, {
+      status: 'complete',
+      stage: 'complete',
+      updatedAt: now,
+      completedAt: now,
+    }, ['uid', 'status', 'stage', 'updatedAt', 'completedAt'], { exists: true }),
+    deleteWrite(projectId, `withdrawalManifests/${manifestId}`),
+    deleteWrite(projectId, `withdrawalLocks/${uid}`),
+  ], 'WITHDRAWAL_FINALIZE_FAILED')
 }

@@ -6,3 +6,5 @@ dist
 phases/**/step*-output.json
 .wrangler
 .dev.vars
+firebase-debug.log
+firestore-debug.log

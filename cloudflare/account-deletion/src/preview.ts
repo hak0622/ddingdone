@@ -125,6 +125,76 @@ function storedSnapshotCore(settlement: FirestoreRecord): Record<string, unknown
   }
 }
 
+function recordField(record: FirestoreRecord, field: string): Record<string, unknown> | null {
+  const value = record.data[field]
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function isValidAnonymizedSnapshot(
+  source: MeetingSource,
+  expectedCurrent: Record<string, unknown>,
+): boolean {
+  if (!source.settlement) return false
+  const memberUids = stringArrayField(source.meeting, 'memberUids')
+  const participantIds = stringArrayField(source.settlement, 'participantIds')
+  const participantNames = recordField(source.settlement, 'participantNames')
+  const paidTotals = recordField(source.settlement, 'participantPaidTotals')
+  const transfers = source.settlement.data.transfers
+  const anonymousIds = participantIds.filter((participantUid) => participantUid.startsWith('withdrawn_'))
+  const currentParticipantIds = participantIds.filter((participantUid) => !participantUid.startsWith('withdrawn_'))
+  if (
+    anonymousIds.length === 0 ||
+    stableStringify(currentParticipantIds) !== stableStringify(memberUids) ||
+    !participantNames || !paidTotals || !Array.isArray(transfers) ||
+    source.settlement.data.schemaVersion !== 1 ||
+    source.settlement.data.participantCount !== participantIds.length ||
+    source.settlement.data.anonymizedParticipantCount !== anonymousIds.length ||
+    new Set(participantIds).size !== participantIds.length ||
+    !sameMembers(participantIds, Object.keys(participantNames)) ||
+    !sameMembers(participantIds, Object.keys(paidTotals))
+  ) return false
+
+  const expectedNames = expectedCurrent.participantNames
+  const expectedPaidTotals = expectedCurrent.participantPaidTotals
+  if (!expectedNames || typeof expectedNames !== 'object' || Array.isArray(expectedNames) ||
+      !expectedPaidTotals || typeof expectedPaidTotals !== 'object' || Array.isArray(expectedPaidTotals)) {
+    return false
+  }
+  for (const memberUid of memberUids) {
+    if (
+      participantNames[memberUid] !== (expectedNames as Record<string, unknown>)[memberUid] ||
+      paidTotals[memberUid] !== (expectedPaidTotals as Record<string, unknown>)[memberUid]
+    ) return false
+  }
+  for (const anonymousId of anonymousIds) {
+    if (participantNames[anonymousId] !== '탈퇴한 사용자' ||
+        typeof paidTotals[anonymousId] !== 'number' ||
+        !Number.isInteger(paidTotals[anonymousId]) || (paidTotals[anonymousId] as number) < 0) {
+      return false
+    }
+  }
+  const paidTotalSum = Object.values(paidTotals).reduce<number>(
+    (sum, value) => typeof value === 'number' && Number.isInteger(value) ? sum + value : Number.NaN,
+    0,
+  )
+  if (
+    !Number.isFinite(paidTotalSum) ||
+    paidTotalSum !== source.settlement.data.totalAmount ||
+    source.meeting.data.totalAmount !== source.settlement.data.totalAmount ||
+    source.meeting.data.expenseCount !== source.expenses.length
+  ) return false
+
+  return transfers.every((transfer) => {
+    if (!transfer || typeof transfer !== 'object' || Array.isArray(transfer)) return false
+    const record = transfer as Record<string, unknown>
+    return typeof record.from === 'string' && participantIds.includes(record.from) &&
+      typeof record.to === 'string' && participantIds.includes(record.to) &&
+      typeof record.amount === 'number' && Number.isInteger(record.amount) && record.amount > 0
+  })
+}
+
 async function collectIssues(uid: string, source: MeetingSource): Promise<PreviewIssue[]> {
   const issues = new Set<PreviewIssue>()
   const memberUids = stringArrayField(source.meeting, 'memberUids')
@@ -149,7 +219,11 @@ async function collectIssues(uid: string, source: MeetingSource): Promise<Previe
     return createdBy !== null && createdBy !== paidBy
   })) issues.add('EXPENSE_OWNERSHIP_MISMATCH')
   if (!expectedSnapshot) issues.add('EXPENSE_DATA_INVALID')
-  if (expectedSnapshot && (
+  const hasAnonymousSnapshot = source.settlement
+    ? stringArrayField(source.settlement, 'participantIds').some((participantUid) =>
+        participantUid.startsWith('withdrawn_'))
+    : false
+  if (expectedSnapshot && !hasAnonymousSnapshot && (
     numberField(source.meeting, 'totalAmount') !== expectedSnapshot.totalAmount ||
     numberField(source.meeting, 'expenseCount') !== source.expenses.length
   )) issues.add('MEETING_AGGREGATES_MISMATCH')
@@ -166,15 +240,18 @@ async function collectIssues(uid: string, source: MeetingSource): Promise<Previe
       issues.add('SETTLEMENT_SNAPSHOT_MISSING')
     } else {
       const participants = stringArrayField(source.settlement, 'participantIds')
-      if (stableStringify(memberUids) !== stableStringify(participants)) {
+      if (!hasAnonymousSnapshot && stableStringify(memberUids) !== stableStringify(participants)) {
         issues.add('SETTLEMENT_PARTICIPANTS_MISMATCH')
       }
       if (expectedSnapshot) {
         const storedCore = storedSnapshotCore(source.settlement)
         const storedHash = stringField(source.settlement, 'hash')
         const computedStoredHash = await sha256Hex(stableStringify(storedCore))
+        const contentMatches = hasAnonymousSnapshot
+          ? isValidAnonymizedSnapshot(source, expectedSnapshot)
+          : stableStringify(expectedSnapshot) === stableStringify(storedCore)
         if (
-          stableStringify(expectedSnapshot) !== stableStringify(storedCore) ||
+          !contentMatches ||
           !storedHash || storedHash !== computedStoredHash
         ) issues.add('SETTLEMENT_SNAPSHOT_INVALID')
       }
@@ -281,10 +358,25 @@ export function withdrawalSourceHashInput(sources: MeetingSource[]): string {
   const normalized = [...sources]
     .sort((left, right) => left.meeting.id.localeCompare(right.meeting.id))
     .map((source) => ({
-      meeting: source.meeting,
-      members: [...source.members].sort((left, right) => left.id.localeCompare(right.id)),
-      expenses: [...source.expenses].sort((left, right) => left.id.localeCompare(right.id)),
-      settlement: source.settlement,
+      // Workflow가 방 잠금 필드를 추가하면 meeting의 updateTime도 바뀐다.
+      // 탈퇴 원본 자체만 비교할 수 있도록 잠금 필드와 Firestore 메타 시간은
+      // 해시에서 제외한다. 같은 내용으로 문서를 다시 만든 경우도 처리 결과는 같다.
+      meeting: {
+        id: source.meeting.id,
+        data: Object.fromEntries(
+          Object.entries(source.meeting.data)
+            .filter(([key]) => key !== 'withdrawalLockRequestId'),
+        ),
+      },
+      members: [...source.members]
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .map(({ id, data }) => ({ id, data })),
+      expenses: [...source.expenses]
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .map(({ id, data }) => ({ id, data })),
+      settlement: source.settlement
+        ? { id: source.settlement.id, data: source.settlement.data }
+        : null,
       childCollectionIds: [...source.childCollectionIds].sort(),
     }))
   return stableStringify(normalized)
