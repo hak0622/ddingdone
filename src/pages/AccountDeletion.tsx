@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Top } from '@toss/tds-mobile'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -11,6 +11,7 @@ import {
   type WithdrawalStatus,
 } from '../lib/accountDeletion'
 import { COLORS } from '../styles/tokens'
+import { finalizeLocalAccountDeletion } from '../lib/accountCleanup'
 
 const SUPPORT_EMAIL = 'seounghak062@gmail.com'
 const TERMINAL_STATUSES = new Set(['complete', 'preview_stale', 'failed'])
@@ -131,10 +132,14 @@ function MeetingCard({ meeting, selectedUid, onSelect }: {
   )
 }
 
-function StatusView({ status, error, onRetry }: {
+type LocalCleanupStatus = 'idle' | 'cleaning' | 'complete' | 'failed'
+
+function StatusView({ status, error, cleanupStatus, onRetry, onRestart }: {
   status: WithdrawalStatus | null
   error: string
+  cleanupStatus: LocalCleanupStatus
   onRetry: () => void
+  onRestart: () => void
 }) {
   const complete = status?.status === 'complete'
   const failed = status?.status === 'failed' || status?.status === 'preview_stale'
@@ -144,7 +149,11 @@ function StatusView({ status, error, onRetry }: {
         : '탈퇴 요청을 안전하게 준비하고 있어요.'
   const title = complete ? '탈퇴가 완료됐어요' : failed ? '탈퇴 처리를 완료하지 못했어요' : '탈퇴 처리 중이에요'
   const description = complete
-    ? '계정과 관련 데이터가 안전하게 정리됐어요. 이제 앱을 닫아주세요.'
+    ? cleanupStatus === 'failed'
+      ? '계정 삭제는 완료됐지만 기기 데이터 정리가 남았어요. 앱을 다시 시작하면 로그인 전에 안전하게 정리해요.'
+      : cleanupStatus === 'complete'
+        ? '계정과 이 기기에 저장된 관련 데이터가 안전하게 정리됐어요.'
+        : '계정 삭제를 완료했고 이 기기에 남은 데이터를 정리하고 있어요.'
     : failed
       ? status?.status === 'preview_stale'
         ? ERROR_TEXT.PREVIEW_STALE
@@ -166,6 +175,16 @@ function StatusView({ status, error, onRetry }: {
           <PrimaryButton onClick={onRetry}>최신 내용 다시 확인</PrimaryButton>
         </div>
       )}
+      {complete && cleanupStatus === 'complete' && (
+        <div style={{ marginTop: 24 }}>
+          <PrimaryButton onClick={onRestart}>새로 시작하기</PrimaryButton>
+        </div>
+      )}
+      {complete && cleanupStatus === 'failed' && (
+        <div style={{ marginTop: 24 }}>
+          <PrimaryButton onClick={onRestart}>앱 다시 시작하기</PrimaryButton>
+        </div>
+      )}
     </div>
   )
 }
@@ -179,6 +198,8 @@ export default function AccountDeletion() {
   const [error, setError] = useState('')
   const [request, setRequest] = useState<{ requestId: string; statusToken: string } | null>(null)
   const [status, setStatus] = useState<WithdrawalStatus | null>(null)
+  const [cleanupStatus, setCleanupStatus] = useState<LocalCleanupStatus>('idle')
+  const cleanupStarted = useRef(false)
 
   const hasManualReview = Boolean(preview?.meetings.some((meeting) => meeting.action === 'manual_review'))
   const choicesComplete = useMemo(() => preview?.meetings.every((meeting) => {
@@ -215,6 +236,18 @@ export default function AccountDeletion() {
       if (timer !== undefined) window.clearTimeout(timer)
     }
   }, [request])
+
+  useEffect(() => {
+    if (status?.status !== 'complete' || cleanupStarted.current) return
+    cleanupStarted.current = true
+    let cancelled = false
+    setCleanupStatus('cleaning')
+    void finalizeLocalAccountDeletion().then(
+      () => { if (!cancelled) setCleanupStatus('complete') },
+      () => { if (!cancelled) setCleanupStatus('failed') },
+    )
+    return () => { cancelled = true }
+  }, [status?.status])
 
   async function handlePreview() {
     setLoading(true)
@@ -261,6 +294,7 @@ export default function AccountDeletion() {
         <StatusView
           status={status}
           error={error}
+          cleanupStatus={cleanupStatus}
           onRetry={() => {
             setRequest(null)
             setStatus(null)
@@ -268,6 +302,7 @@ export default function AccountDeletion() {
             setAgreed(false)
             setError('')
           }}
+          onRestart={() => window.location.replace('/')}
         />
       </>
     )

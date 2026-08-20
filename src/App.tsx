@@ -18,6 +18,7 @@ import MeetingEdit from './pages/MeetingEdit'
 import TermsOfService from './pages/TermsOfService'
 import PrivacyPolicy from './pages/PrivacyPolicy'
 import AccountDeletion from './pages/AccountDeletion'
+import { recoverPendingAccountCleanup, shouldDeferAnonymousSignIn } from './lib/accountCleanup'
 
 const NICKNAME_KEY = 'ddingdone_nickname'
 
@@ -32,6 +33,21 @@ function AppInit() {
   useEffect(() => {
     async function init() {
       try {
+        // 이전 탈퇴 직후 앱이 종료되어 로컬 정리가 끝나지 않았다면 새 익명
+        // 계정을 만들기 전에 이전 인증 세션과 Firestore 캐시부터 제거한다.
+        await recoverPendingAccountCleanup()
+        if (shouldDeferAnonymousSignIn()) {
+          setUser('', '')
+          setReady(true)
+          if (location.pathname !== '/onboarding') {
+            const meetingId = searchParams.get('meeting')
+            const requestedPath = meetingId
+              ? `/meetings/${meetingId}`
+              : location.pathname + location.search
+            navigate(`/onboarding?next=${encodeURIComponent(requestedPath)}`, { replace: true })
+          }
+          return
+        }
         const uid = await signInAnonymously()
 
         if (!uid) {

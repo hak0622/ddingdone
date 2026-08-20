@@ -32,6 +32,15 @@ const cache = new Map<string, CacheEntry>()
 
 const IDLE_STATE: ListState = { meetings: [], loading: false }
 
+export function clearMeetingsCache(): void {
+  for (const entry of cache.values()) {
+    if (entry.teardownTimer) clearTimeout(entry.teardownTimer)
+    entry.unsub?.()
+    entry.listeners.clear()
+  }
+  cache.clear()
+}
+
 function notify(entry: CacheEntry) {
   entry.listeners.forEach((l) => l())
 }

@@ -56,6 +56,15 @@ interface CacheEntry {
 const GRACE_PERIOD_MS = 30_000
 const cache = new Map<string, CacheEntry>()
 
+export function clearMeetingCache(): void {
+  for (const entry of cache.values()) {
+    if (entry.teardownTimer) clearTimeout(entry.teardownTimer)
+    entry.unsubs.forEach((unsubscribe) => unsubscribe())
+    entry.listeners.clear()
+  }
+  cache.clear()
+}
+
 function emptyState(): MeetingState {
   return { meeting: null, members: {}, expenses: [], meetingReady: false, membersReady: false, expensesReady: false, error: false }
 }
