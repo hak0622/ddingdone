@@ -104,6 +104,28 @@ describe('processSharedMemberDeparture', () => {
     expect(meetingWrite?.update?.fields?.createdBy).toEqual({ stringValue: 'user-2' })
   })
 
+  it('공유방 방장 이전 대상이 현재 남은 멤버가 아니면 쓰기 전에 중단한다', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    const source: MeetingSource = {
+      meeting: record('meeting-1', {
+        status: 'active',
+        createdBy: 'user-1',
+        memberUids: ['user-1', 'user-2'],
+        withdrawalLockRequestId: 'request-1',
+      }),
+      members: [record('user-1', {}), record('user-2', {})],
+      expenses: [],
+      settlement: null,
+      settlementDocuments: [],
+      childCollectionIds: ['members'],
+    }
+
+    await expect(processSharedMemberDeparture('project-1', 'access-token', 'user-1', 'request-1', source, null, 'outsider')).rejects.toThrow(
+      'INVALID_SUCCESSOR',
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('단독 방의 모든 하위 문서와 부모 문서를 하나의 commit으로 삭제한다', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 200 }))
     const settlement = record('final', { participantIds: ['user-1'] })
@@ -132,6 +154,65 @@ describe('processSharedMemberDeparture', () => {
       'projects/project-1/databases/(default)/documents/meetings/solo/settlements/final',
       'projects/project-1/databases/(default)/documents/meetings/solo',
     ])
+  })
+
+  it.each([
+    {
+      name: '다른 멤버가 남아 있는 경우',
+      mutate: (source: MeetingSource) => {
+        source.meeting.data.memberUids = ['user-1', 'user-2']
+        source.members.push(record('user-2', {}))
+      },
+    },
+    {
+      name: '다른 사용자의 비용이 섞인 경우',
+      mutate: (source: MeetingSource) => {
+        source.expenses.push(
+          record('foreign-expense', {
+            createdBy: 'user-2',
+            paidBy: 'user-2',
+            amount: 2000,
+          }),
+        )
+      },
+    },
+    {
+      name: '알 수 없는 하위 컬렉션이 있는 경우',
+      mutate: (source: MeetingSource) => {
+        source.childCollectionIds.push('unknown-data')
+      },
+    },
+    {
+      name: '다른 탈퇴 요청의 잠금인 경우',
+      mutate: (source: MeetingSource) => {
+        source.meeting.data.withdrawalLockRequestId = 'other-request'
+      },
+    },
+  ])('단독 방 삭제는 $name 안전하게 쓰기 전에 거부한다', async ({ mutate }) => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    const source: MeetingSource = {
+      meeting: record('solo', {
+        status: 'active',
+        createdBy: 'user-1',
+        memberUids: ['user-1'],
+        withdrawalLockRequestId: 'request-1',
+      }),
+      members: [record('user-1', {})],
+      expenses: [
+        record('expense-1', {
+          createdBy: 'user-1',
+          paidBy: 'user-1',
+          amount: 1000,
+        }),
+      ],
+      settlement: null,
+      settlementDocuments: [],
+      childCollectionIds: ['expenses', 'members'],
+    }
+    mutate(source)
+
+    await expect(deleteSoloMeeting('project-1', 'access-token', 'user-1', 'request-1', source)).rejects.toThrow('SOLO_MEETING_NOT_SAFE_TO_DELETE')
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('완료 요청에서는 상태 토큰 외의 개인정보와 처리 원본을 제거한다', async () => {

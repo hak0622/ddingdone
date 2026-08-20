@@ -1,82 +1,31 @@
-# Firestore Security Rules 검증 기록
+# Firestore Security Rules 테스트
 
-**검증 일자:** 2026-07-28
-**검증 방법:** Firebase Console Rules Playground (시뮬레이션)
-**대상 Rules:** `firestore.rules`
+Firestore 보안 규칙은 Firebase Console의 수동 시뮬레이션이 아니라 로컬 Emulator에서 자동 검증한다. 테스트 데이터에는 운영 프로젝트나 실제 사용자 UID를 사용하지 않는다.
 
----
+## 실행
 
-## 테스트 환경
-
-| 항목 | 값 |
-|---|---|
-| 모임 ID | `p3cVW6WNEp0688eXCgi3` |
-| 방장 UID | `R2EvHEnl5FS7mTjNT1RpEn4qFV62` |
-| 일반 멤버 UID (본인) | `7c6WOn8jflb7gb2ad53PZLgtrHN2` |
-
----
-
-## 시나리오 1 — createdBy 탈취 시도
-
-**의도:** 일반 멤버가 `createdBy` 필드를 본인 UID로 바꿔 방장 권한(모임 삭제 등)을 탈취
-
-| 항목 | 값 |
-|---|---|
-| Operation | `update` |
-| Path | `/databases/(default)/documents/meetings/p3cVW6WNEp0688eXCgi3` |
-| Auth UID | `7c6WOn8jflb7gb2ad53PZLgtrHN2` (일반 멤버) |
-| Request data | `{ "createdBy": "7c6WOn8jflb7gb2ad53PZLgtrHN2" }` |
-
-**결과: 거부 (deny)** ✓
-
-관련 Rules 조건:
-```
-!request.resource.data.diff(resource.data).affectedKeys().hasAny(['createdBy', 'memberUids', 'memberCount'])
+```bash
+npm run test:rules
 ```
 
----
+Java 17 환경과 호환되도록 Firebase CLI 14.27.0을 실행하며, Firebase 로그인은 필요하지 않다. Emulator는 `ddingdone-test` 로컬 프로젝트와 8080 포트만 사용하므로 운영 Firestore 데이터에는 접근하지 않는다.
 
-## 시나리오 2 — 가짜 멤버 삽입 시도
+Firestore 규칙과 Worker 테스트를 함께 실행하려면 다음 명령을 사용한다.
 
-**의도:** memberUids에 없는 외부인이 members 서브컬렉션에 직접 문서를 생성해 perPerson 정산 금액 조작
-
-| 항목 | 값 |
-|---|---|
-| Operation | `create` |
-| Path | `/databases/(default)/documents/meetings/p3cVW6WNEp0688eXCgi3/members/fakeUID123` |
-| Auth UID | `fakeUID123` (비멤버) |
-| Request data | `{ "nickname": "침입자" }` |
-
-**결과: Playground 실행 오류 (skip)**
-
-> Rules 내 `isMember()` 함수가 `get()`으로 부모 문서를 조회하는데, 존재하지 않는 UID로 시뮬레이션할 때 Playground가 처리하지 못하는 알려진 한계. Rules 로직상 `isMember()` 가 false를 반환하므로 차단됨.
-
----
-
-## 시나리오 3 — 타인 명의 비용 등록 시도
-
-**의도:** 멤버가 다른 사람의 UID를 `paidBy`로 지정해 남의 이름으로 비용을 등록
-
-| 항목 | 값 |
-|---|---|
-| Operation | `create` |
-| Path | `/databases/(default)/documents/meetings/p3cVW6WNEp0688eXCgi3/expenses/testExp` |
-| Auth UID | `7c6WOn8jflb7gb2ad53PZLgtrHN2` (일반 멤버) |
-| Request data | `{ "paidBy": "R2EvHEnl5FS7mTjNT1RpEn4qFV62", "amount": 10000, "memo": "", "category": "" }` |
-
-**결과: 거부 (deny)** ✓
-
-관련 Rules 조건:
-```
-request.resource.data.paidBy == request.auth.uid
+```bash
+npm run test:stage10
 ```
 
----
+## 탈퇴 관련 검증 범위
 
-## 결론
+- 잠금 전 정상적인 방·멤버·비용 수정 허용
+- 계정 탈퇴 잠금 중 해당 사용자의 쓰기 차단
+- 한 사용자의 계정 잠금이 다른 사용자의 다른 방에 영향을 주지 않음
+- 방 탈퇴 잠금 중 해당 방의 모든 멤버 쓰기 차단
+- 잠금 중에도 사용자 데이터 읽기 유지
+- 앱 클라이언트의 탈퇴 요청·미리보기·잠금 내부 문서 접근 차단
+- 잠금 해제 후 정상적인 쓰기 복구
 
-| 시나리오 | 결과 |
-|---|---|
-| createdBy 탈취 | 차단 확인 ✓ |
-| 가짜 멤버 삽입 | Playground 한계로 시뮬레이션 불가 (Rules 로직상 차단) |
-| 타인 명의 비용 등록 | 차단 확인 ✓ |
+기존 보안 시나리오인 일반 멤버의 `createdBy` 탈취, 비멤버의 가짜 멤버 문서 생성, 다른 사용자 명의의 비용 등록도 Emulator에서 거부되는지 함께 검증한다.
+
+Worker 테스트는 방장 이전 대상 검증과 단독 방 삭제 전 안전 조건도 확인한다. 다른 멤버, 다른 사용자의 비용, 알 수 없는 하위 컬렉션 또는 다른 요청의 잠금이 발견되면 Firestore 쓰기를 보내기 전에 삭제를 중단해야 한다.
