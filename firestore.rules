@@ -21,6 +21,26 @@ service cloud.firestore {
     }
 
     match /meetings/{meetingId} {
+      function isValidPhotoUpdate() {
+        let changed = request.resource.data.diff(resource.data).affectedKeys();
+        let photoFields = [
+          'photoUrl',
+          'photoPublicId',
+          'photoAssetId',
+          'photoUploadedBy',
+          'photoUploadedAt'
+        ];
+        return !changed.hasAny(photoFields) || (
+          changed.hasAll(['photoUrl', 'photoPublicId', 'photoAssetId', 'photoUploadedAt']) &&
+          request.resource.data.photoUrl is string &&
+          request.resource.data.photoPublicId is string &&
+          request.resource.data.photoPublicId.matches('ddingdone/' + meetingId + '/.*') &&
+          request.resource.data.photoAssetId is string &&
+          request.resource.data.photoUploadedBy == request.auth.uid &&
+          request.resource.data.photoUploadedAt == request.time
+        );
+      }
+
       // 초대 링크로 들어온 비멤버도 "참여하기" 화면을 보려면 ID로 단건 조회는 허용한다.
       // list(필터 없는 컬렉션 조회)는 본인이 멤버인 문서만 허용해 전체 덤프를 막는다.
       allow get: if isAuthenticated();
@@ -28,7 +48,12 @@ service cloud.firestore {
 
       allow create: if isAuthenticated()
         && request.resource.data.createdBy == request.auth.uid
-        && request.resource.data.memberUids == [request.auth.uid];
+        && request.resource.data.memberUids == [request.auth.uid]
+        && request.resource.data.photoUrl == null
+        && request.resource.data.photoPublicId == null
+        && request.resource.data.photoAssetId == null
+        && request.resource.data.photoUploadedBy == null
+        && request.resource.data.photoUploadedAt == null;
 
       // 이미 멤버: 이름/사진/메모/정산 상태/totalAmount 등은 자유롭게 수정 가능하지만
       // createdBy·memberUids·memberCount는 건드릴 수 없다 — 이 셋은 아래 참여(join)·
@@ -51,7 +76,8 @@ service cloud.firestore {
       allow update: if isAuthenticated() && (
         (
           request.auth.uid in resource.data.memberUids &&
-          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['createdBy', 'memberUids', 'memberCount'])
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['createdBy', 'memberUids', 'memberCount']) &&
+          isValidPhotoUpdate()
         ) ||
         (
           resource.data.status != 'settled' &&
@@ -105,17 +131,29 @@ service cloud.firestore {
         // 비멤버도 참여 전 화면에서 읽기를 시도할 수 있어 읽기는 열어두고, 쓰기만 멤버로 제한
         allow read: if isAuthenticated();
 
-        // 본인 비용만 추가할 수 있다 — 결제자를 자유롭게 고를 수 있게 두면 누구나
-        // 남의 이름으로 비용을 대신 기록할 수 있었는데, 그렇게 쓰인 비용은 정작 그
-        // 당사자가 수정·삭제할 권한이 전혀 없어 데이터가 굳어버리는 문제가 있었다
-        // (실사용자 피드백으로 확인).
+        // 신규 비용은 결제자와 작성자를 모두 본인 UID로 고정한다. 2026-06-29 운영
+        // 시작 당시 문서에는 createdBy가 없으므로 기존 문서는 그대로 호환하되,
+        // 신규 문서부터 명시적인 작성자를 저장한다.
         allow create: if isAuthenticated() && isMember(meetingId) && !isSettled(meetingId) &&
-          request.resource.data.paidBy == request.auth.uid;
+          request.resource.data.paidBy == request.auth.uid &&
+          request.resource.data.createdBy == request.auth.uid &&
+          request.resource.data.createdAt == request.time &&
+          request.resource.data.updatedBy == request.auth.uid &&
+          request.resource.data.updatedAt == request.time &&
+          request.resource.data.schemaVersion == 2;
 
         // 일반 수정(금액/카테고리 등)은 "내 비용"일 때만, 정산 전에만 허용한다.
+        // paidBy·createdBy·createdAt·schemaVersion은 생성 후 바꿀 수 없다. 기존
+        // 문서에 createdBy가 없더라도 그 필드를 추가하지 않는 수정은 정상 통과한다.
         allow update: if isAuthenticated() && isMember(meetingId) &&
           resource.data.paidBy == request.auth.uid &&
           request.resource.data.paidBy == request.auth.uid &&
+          !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(['paidBy', 'createdBy', 'createdAt', 'schemaVersion']) &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['amount', 'category', 'memo', 'updatedBy', 'updatedAt']) &&
+          request.resource.data.updatedBy == request.auth.uid &&
+          request.resource.data.updatedAt == request.time &&
           !isSettled(meetingId);
 
         // 일반 삭제는 "내 비용"일 때만(정산 전에만) 허용한다. 모임 전체 삭제에 묶여
