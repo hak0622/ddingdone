@@ -30,6 +30,7 @@ function source(overrides: Partial<MeetingSource> = {}): MeetingSource {
       record('expense-2', { paidBy: 'owner-1', createdBy: 'owner-1', amount: 2000 }),
     ],
     settlement: null,
+    settlementDocuments: [],
     childCollectionIds: ['expenses', 'members'],
     ...overrides,
   }
@@ -147,6 +148,10 @@ describe('buildWithdrawalPreview', () => {
       participantPaidTotals: { [USER_UID]: 1000, 'owner-1': 2000 },
       transfers: [{ from: USER_UID, to: 'owner-1', amount: 500 }],
     }
+    const finalSettlement = record('final', {
+      ...core,
+      hash: await sha256Hex(stableStringify(core)),
+    })
     const settled = source({
       meeting: record('settled-valid', {
         name: '완료된 정산',
@@ -157,19 +162,19 @@ describe('buildWithdrawalPreview', () => {
         totalAmount: 3000,
         expenseCount: 2,
       }),
-      settlement: record('final', {
-        ...core,
-        hash: await sha256Hex(stableStringify(core)),
-      }),
+      settlement: finalSettlement,
+      settlementDocuments: [finalSettlement],
       childCollectionIds: ['expenses', 'members', 'settlements'],
     })
 
     const valid = await buildWithdrawalPreview(USER_UID, [settled])
     expect(valid.meetings[0]).toMatchObject({ action: 'anonymize_settled_shared', issues: [] })
 
+    const tamperedSettlement = record('final', { ...settled.settlement?.data, hash: '0'.repeat(64) })
     const tampered = await buildWithdrawalPreview(USER_UID, [{
       ...settled,
-      settlement: record('final', { ...settled.settlement?.data, hash: '0'.repeat(64) }),
+      settlement: tamperedSettlement,
+      settlementDocuments: [tamperedSettlement],
     }])
     expect(tampered.meetings[0]).toMatchObject({ action: 'manual_review' })
     expect(tampered.meetings[0]?.issues).toContain('SETTLEMENT_SNAPSHOT_INVALID')
@@ -196,6 +201,28 @@ describe('buildWithdrawalPreview', () => {
     expect(preview.meetings[0]?.issues).toContain('UNKNOWN_CHILD_COLLECTION')
   })
 
+  it('final 외의 정산 문서가 있으면 숨은 데이터를 남기지 않도록 자동 삭제를 중단한다', async () => {
+    const meeting = record('solo-hidden-settlement', {
+      name: '검토 필요',
+      status: 'active',
+      createdBy: USER_UID,
+      memberCount: 1,
+      memberUids: [USER_UID],
+      totalAmount: 0,
+      expenseCount: 0,
+    })
+    const result = await buildWithdrawalPreview(USER_UID, [source({
+      meeting,
+      members: [record(USER_UID, { nickname: '사용자' })],
+      expenses: [],
+      settlementDocuments: [record('legacy', { value: 'unknown' })],
+      childCollectionIds: ['members', 'settlements'],
+    })])
+
+    expect(result.meetings[0]).toMatchObject({ action: 'manual_review' })
+    expect(result.meetings[0]?.issues).toContain('SETTLEMENT_DOCUMENTS_MISMATCH')
+  })
+
   it('이전 탈퇴자가 익명화된 정산방도 현재 사용자 원본만 다시 검증한다', async () => {
     const core = {
       schemaVersion: 1,
@@ -214,6 +241,11 @@ describe('buildWithdrawalPreview', () => {
       },
       transfers: [{ from: 'withdrawn_abcdef1234567890abcdef12', to: 'owner-1', amount: 500 }],
     }
+    const finalSettlement = record('final', {
+      ...core,
+      hash: await sha256Hex(stableStringify(core)),
+      anonymizedParticipantCount: 1,
+    })
     const settled = source({
       meeting: record('settled-anonymized', {
         name: '익명 참여자가 있는 정산',
@@ -224,11 +256,8 @@ describe('buildWithdrawalPreview', () => {
         totalAmount: 3500,
         expenseCount: 2,
       }),
-      settlement: record('final', {
-        ...core,
-        hash: await sha256Hex(stableStringify(core)),
-        anonymizedParticipantCount: 1,
-      }),
+      settlement: finalSettlement,
+      settlementDocuments: [finalSettlement],
       childCollectionIds: ['expenses', 'members', 'settlements'],
     })
 

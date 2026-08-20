@@ -3,6 +3,7 @@ import { sha256Hex } from './crypto'
 import type { FirestoreRecord, WithdrawalPreview } from './types'
 import {
   parseWithdrawalConfirmBody,
+  resolveSuccessorByMeeting,
   validateManifestForConfirmation,
   WithdrawalValidationError,
 } from './withdrawal'
@@ -82,8 +83,8 @@ describe('withdrawal confirmation validation', () => {
     })
   })
 
-  it('방장 이전 또는 단독 방 처리는 다음 단계 전까지 중단한다', async () => {
-    const specialPreview = preview({
+  it('후임이 한 명이면 자동으로 방장을 이전한다', async () => {
+    const ownerPreview = preview({
       meetings: [{
         ...preview().meetings[0]!,
         role: 'owner',
@@ -93,15 +94,61 @@ describe('withdrawal confirmation validation', () => {
       }],
       summary: { ...preview().summary, ownershipTransferCount: 1 },
     })
-    const stored = await manifest(specialPreview)
+    const stored = await manifest(ownerPreview)
     await expect(validateManifestForConfirmation(UID, stored, {
       manifestId: stored.id,
       manifestHash: 'b'.repeat(64),
       confirmationNonce: NONCE,
       successorByMeeting: {},
-    }, Date.parse('2026-08-20T00:30:00.000Z'))).rejects.toMatchObject({
-      code: 'SPECIAL_HANDLING_NOT_READY',
+    }, Date.parse('2026-08-20T00:30:00.000Z'))).resolves.toEqual(ownerPreview)
+    expect(resolveSuccessorByMeeting(ownerPreview, {})).toEqual({ 'meeting-1': 'member-2' })
+  })
+
+  it('후임 후보가 여러 명이면 후보 중 한 명을 명시해야 한다', () => {
+    const ownerPreview = preview({
+      meetings: [{
+        ...preview().meetings[0]!,
+        role: 'owner',
+        successorRequired: true,
+        automaticSuccessorUid: null,
+        successorCandidates: [
+          { uid: 'member-2', nickname: '둘째' },
+          { uid: 'member-3', nickname: '셋째' },
+        ],
+      }],
     })
+    expect(() => resolveSuccessorByMeeting(ownerPreview, {})).toThrowError(WithdrawalValidationError)
+    expect(resolveSuccessorByMeeting(ownerPreview, { 'meeting-1': 'member-3' }))
+      .toEqual({ 'meeting-1': 'member-3' })
+  })
+
+  it('검증된 단독 방은 후임 없이 전체 삭제를 승인한다', async () => {
+    const soloPreview = preview({
+      meetings: [{
+        ...preview().meetings[0]!,
+        meetingId: 'solo',
+        role: 'owner',
+        memberCount: 1,
+        action: 'delete_solo_room',
+        authoredExpenseCount: 1,
+        successorCandidates: [],
+        deletesCloudinaryPhoto: true,
+      }],
+      summary: {
+        ...preview().summary,
+        sharedMeetingCount: 0,
+        soloMeetingCountToDelete: 1,
+        cloudinaryPhotoCountToDelete: 1,
+      },
+    })
+    const stored = await manifest(soloPreview)
+
+    await expect(validateManifestForConfirmation(UID, stored, {
+      manifestId: stored.id,
+      manifestHash: 'b'.repeat(64),
+      confirmationNonce: NONCE,
+      successorByMeeting: {},
+    }, Date.parse('2026-08-20T00:30:00.000Z'))).resolves.toEqual(soloPreview)
   })
 
   it('확인 요청에 정의되지 않은 필드가 있으면 거부한다', () => {

@@ -12,6 +12,7 @@ import { buildWithdrawalPreview, withdrawalSourceHashInput } from './preview'
 import type { WithdrawalPreviewResponse } from './types'
 import {
   parseWithdrawalConfirmBody,
+  resolveSuccessorByMeeting,
   validateManifestForConfirmation,
   verifyHashedToken,
   WithdrawalValidationError,
@@ -187,8 +188,9 @@ async function confirmWithdrawal(request: Request, env: Env, origin: string | nu
       `withdrawalManifests/${body.manifestId}`,
       accessToken,
     )
-    await validateManifestForConfirmation(uid, manifest, body)
+    const preview = await validateManifestForConfirmation(uid, manifest, body)
     if (!manifest) throw new WithdrawalValidationError('MANIFEST_NOT_FOUND')
+    const successorByMeeting = resolveSuccessorByMeeting(preview, body.successorByMeeting)
 
     const requestId = crypto.randomUUID()
     const statusToken = randomNonce()
@@ -197,7 +199,7 @@ async function confirmWithdrawal(request: Request, env: Env, origin: string | nu
       uid,
       requestId,
       statusTokenHash: await sha256Hex(statusToken),
-      successorByMeeting: body.successorByMeeting,
+      successorByMeeting,
       now: new Date(),
     })
 

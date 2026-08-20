@@ -14,6 +14,7 @@ export interface MeetingSource {
   members: FirestoreRecord[]
   expenses: FirestoreRecord[]
   settlement: FirestoreRecord | null
+  settlementDocuments: FirestoreRecord[]
   childCollectionIds: string[]
 }
 
@@ -35,6 +36,7 @@ export type PreviewIssue =
   | 'PHOTO_REFERENCE_INVALID'
   | 'SETTLEMENT_SNAPSHOT_INVALID'
   | 'SETTLEMENT_SNAPSHOT_MISSING'
+  | 'SETTLEMENT_DOCUMENTS_MISMATCH'
   | 'SETTLEMENT_PARTICIPANTS_MISMATCH'
   | 'UNEXPECTED_SETTLEMENT_SNAPSHOT'
   | 'UNKNOWN_CHILD_COLLECTION'

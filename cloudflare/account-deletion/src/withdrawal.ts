@@ -26,6 +26,7 @@ const PREVIEW_ISSUES = new Set<PreviewIssue>([
   'PHOTO_REFERENCE_INVALID',
   'SETTLEMENT_SNAPSHOT_INVALID',
   'SETTLEMENT_SNAPSHOT_MISSING',
+  'SETTLEMENT_DOCUMENTS_MISMATCH',
   'SETTLEMENT_PARTICIPANTS_MISMATCH',
   'UNEXPECTED_SETTLEMENT_SNAPSHOT',
   'UNKNOWN_CHILD_COLLECTION',
@@ -189,6 +190,30 @@ export function previewFromManifest(manifest: FirestoreRecord): WithdrawalPrevie
   }
 }
 
+export function resolveSuccessorByMeeting(
+  preview: WithdrawalPreview,
+  provided: Record<string, string>,
+): Record<string, string> {
+  const ownerMeetings = preview.meetings.filter(
+    (meeting) => meeting.role === 'owner' && meeting.memberCount > 1,
+  )
+  const ownerMeetingIds = new Set(ownerMeetings.map((meeting) => meeting.meetingId))
+  if (Object.keys(provided).some((meetingId) => !ownerMeetingIds.has(meetingId))) {
+    throw new WithdrawalValidationError('INVALID_SUCCESSOR')
+  }
+
+  const resolved: Record<string, string> = {}
+  for (const meeting of ownerMeetings) {
+    const selectedUid = provided[meeting.meetingId] ?? meeting.automaticSuccessorUid
+    if (
+      !selectedUid ||
+      !meeting.successorCandidates.some((candidate) => candidate.uid === selectedUid)
+    ) throw new WithdrawalValidationError('INVALID_SUCCESSOR')
+    resolved[meeting.meetingId] = selectedUid
+  }
+  return resolved
+}
+
 export async function validateManifestForConfirmation(
   uid: string,
   manifest: FirestoreRecord | null,
@@ -215,14 +240,6 @@ export async function validateManifestForConfirmation(
   if (preview.meetings.some((meeting) => meeting.action === 'manual_review')) {
     throw new WithdrawalValidationError('MANUAL_REVIEW_REQUIRED')
   }
-  // 방장 이전·단독 방 전체 삭제·Cloudinary 삭제는 다음 단계에서 연결한다.
-  if (preview.meetings.some((meeting) =>
-    meeting.action === 'delete_solo_room' ||
-    (meeting.role === 'owner' && meeting.memberCount > 1))) {
-    throw new WithdrawalValidationError('SPECIAL_HANDLING_NOT_READY')
-  }
-  if (Object.keys(body.successorByMeeting).length > 0) {
-    throw new WithdrawalValidationError('INVALID_SUCCESSOR')
-  }
+  resolveSuccessorByMeeting(preview, body.successorByMeeting)
   return preview
 }

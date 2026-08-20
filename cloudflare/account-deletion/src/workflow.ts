@@ -2,8 +2,10 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloud
 import { NonRetryableError } from 'cloudflare:workflows'
 import { anonymizeSettlementSnapshot, SnapshotAnonymizationError } from './anonymization'
 import { createGoogleAccessToken, deleteFirebaseUser } from './auth'
+import { deleteCloudinaryMeetingImage } from './cloudinary'
 import { sha256Hex } from './crypto'
 import {
+  deleteSoloMeeting,
   finalizeWithdrawalMetadata,
   getFirestoreDocument,
   loadMeetingSource,
@@ -17,6 +19,7 @@ import {
 import { withdrawalSourceHashInput } from './preview'
 import type {
   FirestoreRecord,
+  WithdrawalMeetingAction,
   WithdrawalMeetingPreview,
   WithdrawalWorkflowParams,
 } from './types'
@@ -33,6 +36,27 @@ interface WorkflowRequestContext {
   manifestId: string
   sourceHash: string
   meetings: WithdrawalMeetingPreview[]
+  successorByMeeting: Record<string, string>
+}
+
+interface WorkflowMeetingPlan {
+  meetingId: string
+  status: 'active' | 'settled'
+  action: WithdrawalMeetingAction
+  successorUid: string | null
+  photoPublicId: string | null
+}
+
+function successorMap(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new NonRetryableError('INVALID_REQUEST_RECORD')
+  }
+  const result: Record<string, string> = {}
+  for (const [meetingId, uid] of Object.entries(value)) {
+    if (typeof uid !== 'string') throw new NonRetryableError('INVALID_REQUEST_RECORD')
+    result[meetingId] = uid
+  }
+  return result
 }
 
 function requestContext(request: FirestoreRecord | null): WorkflowRequestContext {
@@ -45,7 +69,13 @@ function requestContext(request: FirestoreRecord | null): WorkflowRequestContext
     typeof sourceHash !== 'string' || !/^[0-9a-f]{64}$/u.test(sourceHash)
   ) throw new NonRetryableError('INVALID_REQUEST_RECORD')
   const preview = previewFromManifest({ id: request.id, data: { preview: request.data.preview } })
-  return { uid, manifestId, sourceHash, meetings: preview.meetings }
+  return {
+    uid,
+    manifestId,
+    sourceHash,
+    meetings: preview.meetings,
+    successorByMeeting: successorMap(request.data.successorByMeeting),
+  }
 }
 
 async function loadContext(env: Env, requestId: string, accessToken: string): Promise<WorkflowRequestContext> {
@@ -65,7 +95,7 @@ export class AccountDeletionWorkflow extends WorkflowEntrypoint<Env, WithdrawalW
     let processingStarted = false
 
     try {
-      const meetingPlan = await step.do('lock withdrawal meetings', SENSITIVE_RETRY, async () => {
+      await step.do('lock withdrawal meetings', RETRY, async () => {
         const accessToken = await createGoogleAccessToken(
           this.env.FIREBASE_CLIENT_EMAIL,
           this.env.FIREBASE_PRIVATE_KEY,
@@ -91,10 +121,10 @@ export class AccountDeletionWorkflow extends WorkflowEntrypoint<Env, WithdrawalW
           requestId,
           'locked',
         )
-        return context.meetings.map(({ meetingId, status }) => ({ meetingId, status }))
+        return { locked: true }
       })
 
-      await step.do('revalidate withdrawal source', RETRY, async () => {
+      const meetingPlan = await step.do('revalidate withdrawal source', SENSITIVE_RETRY, async () => {
         const accessToken = await createGoogleAccessToken(
           this.env.FIREBASE_CLIENT_EMAIL,
           this.env.FIREBASE_PRIVATE_KEY,
@@ -107,7 +137,21 @@ export class AccountDeletionWorkflow extends WorkflowEntrypoint<Env, WithdrawalW
         )
         const currentHash = await sha256Hex(withdrawalSourceHashInput(sources))
         if (currentHash !== context.sourceHash) throw new NonRetryableError('PREVIEW_STALE')
-        return { verified: true }
+        const sourceByMeeting = new Map(sources.map((source) => [source.meeting.id, source]))
+        return context.meetings.map((meeting): WorkflowMeetingPlan => {
+          const source = sourceByMeeting.get(meeting.meetingId)
+          if (!source) throw new NonRetryableError('PREVIEW_STALE')
+          const photoPublicId = source.meeting.data.photoPublicId
+          return {
+            meetingId: meeting.meetingId,
+            status: meeting.status,
+            action: meeting.action,
+            successorUid: context.successorByMeeting[meeting.meetingId] ?? null,
+            photoPublicId: meeting.action === 'delete_solo_room' && typeof photoPublicId === 'string'
+              ? photoPublicId
+              : null,
+          }
+        })
       })
 
       processingStarted = true
@@ -121,7 +165,7 @@ export class AccountDeletionWorkflow extends WorkflowEntrypoint<Env, WithdrawalW
           accessToken,
           requestId,
           'processing',
-          'deleting-shared-data',
+          'processing-meetings',
         )
         return { processing: true }
       })
@@ -136,11 +180,30 @@ export class AccountDeletionWorkflow extends WorkflowEntrypoint<Env, WithdrawalW
             this.env.FIREBASE_PRIVATE_KEY,
           )
           const stepContext = await loadContext(this.env, requestId, stepAccessToken)
+          const meetingDocument = await getFirestoreDocument(
+            this.env.FIREBASE_PROJECT_ID,
+            `meetings/${meeting.meetingId}`,
+            stepAccessToken,
+          )
+          if (!meetingDocument && meeting.action === 'delete_solo_room') {
+            return { deletedExpenseCount: 0, alreadyDeleted: true }
+          }
+          if (!meetingDocument) throw new NonRetryableError('MEETING_NOT_FOUND')
           const source = await loadMeetingSource(
             this.env.FIREBASE_PROJECT_ID,
             meeting.meetingId,
             stepAccessToken,
+            meetingDocument,
           )
+          if (meeting.action === 'delete_solo_room') {
+            return deleteSoloMeeting(
+              this.env.FIREBASE_PROJECT_ID,
+              stepAccessToken,
+              stepContext.uid,
+              requestId,
+              source,
+            )
+          }
           const snapshot = meeting.status === 'settled' && source.meeting.data.memberUids instanceof Array &&
             source.meeting.data.memberUids.includes(stepContext.uid)
             ? await anonymizeSettlementSnapshot(
@@ -162,8 +225,23 @@ export class AccountDeletionWorkflow extends WorkflowEntrypoint<Env, WithdrawalW
             requestId,
             source,
             snapshot,
+            meeting.successorUid,
           )
         })
+
+        const photoPublicId = meeting.photoPublicId
+        if (meeting.action === 'delete_solo_room' && photoPublicId) {
+          await step.do(`delete meeting photo ${meeting.meetingId}`, RETRY, async () => {
+            await deleteCloudinaryMeetingImage(
+              this.env.CLOUDINARY_CLOUD_NAME,
+              this.env.CLOUDINARY_API_KEY,
+              this.env.CLOUDINARY_API_SECRET,
+              meeting.meetingId,
+              photoPublicId,
+            )
+            return { deleted: true }
+          })
+        }
       }
 
       await step.do('delete firebase auth account', RETRY, async () => {

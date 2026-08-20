@@ -10,8 +10,10 @@ const MAX_MEMBERS_PER_MEETING = 500
 // 탈퇴자 비용 삭제, 멤버 삭제, 방 갱신, 정산 스냅샷 갱신을 Firestore의
 // 단일 500-write 커밋으로 처리하기 위한 보수적인 상한이다.
 const MAX_EXPENSES_PER_MEETING = 450
+const MAX_SETTLEMENT_DOCUMENTS = 10
 const MAX_CHILD_COLLECTIONS = 100
 const PAGE_SIZE = 300
+const MAX_ATOMIC_WRITES = 500
 const FIRESTORE_API = 'https://firestore.googleapis.com/v1'
 const EXTERNAL_REQUEST_TIMEOUT_MS = 10_000
 
@@ -337,13 +339,14 @@ export async function loadMeetingSource(
   )
   if (!meeting) throw new FirestoreError('MEETING_NOT_FOUND')
   const parentPath = `meetings/${encodeURIComponent(meeting.id)}`
-  const [members, expenses, settlement, childCollectionIds] = await Promise.all([
+  const [members, expenses, settlementDocuments, childCollectionIds] = await Promise.all([
     listDocuments(projectId, parentPath, 'members', accessToken, MAX_MEMBERS_PER_MEETING),
     listDocuments(projectId, parentPath, 'expenses', accessToken, MAX_EXPENSES_PER_MEETING),
-    getDocument(projectId, `${parentPath}/settlements/final`, accessToken),
+    listDocuments(projectId, parentPath, 'settlements', accessToken, MAX_SETTLEMENT_DOCUMENTS),
     listChildCollectionIds(projectId, parentPath, accessToken),
   ])
-  return { meeting, members, expenses, settlement, childCollectionIds }
+  const settlement = settlementDocuments.find((document) => document.id === 'final') ?? null
+  return { meeting, members, expenses, settlement, settlementDocuments, childCollectionIds }
 }
 
 export async function createWithdrawalManifest(
@@ -572,6 +575,7 @@ export async function processSharedMemberDeparture(
   requestId: string,
   source: MeetingSource,
   anonymizedSnapshot: Record<string, unknown> | null,
+  successorUid: string | null,
 ): Promise<{ deletedExpenseCount: number }> {
   const meetingId = source.meeting.id
   const memberUids = Array.isArray(source.meeting.data.memberUids)
@@ -593,6 +597,11 @@ export async function processSharedMemberDeparture(
         return sum + (typeof amount === 'number' && Number.isFinite(amount) ? amount : 0)
       }, 0)
   const remainingMemberUids = memberUids.filter((memberUid) => memberUid !== uid)
+  const isOwner = source.meeting.data.createdBy === uid
+  if (
+    (isOwner && (!successorUid || !remainingMemberUids.includes(successorUid))) ||
+    (!isOwner && successorUid !== null)
+  ) throw new FirestoreError('INVALID_SUCCESSOR')
   const meetingData: Record<string, unknown> = {
     memberUids: remainingMemberUids,
     memberCount: remainingMemberUids.length,
@@ -606,6 +615,10 @@ export async function processSharedMemberDeparture(
     'totalAmount',
     'withdrawalLockRequestId',
   ]
+  if (isOwner) {
+    meetingData.createdBy = successorUid
+    meetingFields.push('createdBy')
+  }
   if (source.meeting.data.photoUploadedBy === uid) {
     meetingData.photoUploadedBy = null
     meetingFields.push('photoUploadedBy')
@@ -645,6 +658,62 @@ export async function processSharedMemberDeparture(
   return { deletedExpenseCount: ownedExpenses.length }
 }
 
+export async function deleteSoloMeeting(
+  projectId: string,
+  accessToken: string,
+  uid: string,
+  requestId: string,
+  source: MeetingSource,
+): Promise<{ deletedExpenseCount: number }> {
+  const meetingId = source.meeting.id
+  const memberUids = Array.isArray(source.meeting.data.memberUids)
+    ? source.meeting.data.memberUids.filter((value): value is string => typeof value === 'string')
+    : []
+  const safeSettlement = source.settlementDocuments.length === 0 || (
+    source.settlementDocuments.length === 1 &&
+    source.settlementDocuments[0]?.id === 'final' &&
+    Array.isArray(source.settlement?.data.participantIds) &&
+    source.settlement.data.participantIds.length === 1 &&
+    source.settlement.data.participantIds[0] === uid
+  )
+  if (
+    source.meeting.data.withdrawalLockRequestId !== requestId ||
+    source.meeting.data.createdBy !== uid ||
+    memberUids.length !== 1 || memberUids[0] !== uid ||
+    source.members.length !== 1 || source.members[0]?.id !== uid ||
+    source.expenses.some((expense) =>
+      expenseAuthor(expense) !== uid || expense.data.paidBy !== uid) ||
+    source.childCollectionIds.some((id) => !['expenses', 'members', 'settlements'].includes(id)) ||
+    !safeSettlement
+  ) throw new FirestoreError('SOLO_MEETING_NOT_SAFE_TO_DELETE')
+
+  const writes: FirestoreWrite[] = [
+    ...source.expenses.map((expense) => deleteWrite(
+      projectId,
+      `meetings/${meetingId}/expenses/${expense.id}`,
+      expense.updateTime ? { updateTime: expense.updateTime } : { exists: true },
+    )),
+    ...source.members.map((member) => deleteWrite(
+      projectId,
+      `meetings/${meetingId}/members/${member.id}`,
+      member.updateTime ? { updateTime: member.updateTime } : { exists: true },
+    )),
+    ...source.settlementDocuments.map((settlement) => deleteWrite(
+      projectId,
+      `meetings/${meetingId}/settlements/${settlement.id}`,
+      settlement.updateTime ? { updateTime: settlement.updateTime } : { exists: true },
+    )),
+    deleteWrite(
+      projectId,
+      `meetings/${meetingId}`,
+      source.meeting.updateTime ? { updateTime: source.meeting.updateTime } : { exists: true },
+    ),
+  ]
+  if (writes.length > MAX_ATOMIC_WRITES) throw new FirestoreError('DOCUMENT_LIMIT_EXCEEDED')
+  await commitWrites(projectId, accessToken, writes, 'SOLO_MEETING_DELETE_FAILED')
+  return { deletedExpenseCount: source.expenses.length }
+}
+
 export async function finalizeWithdrawalMetadata(
   projectId: string,
   accessToken: string,
@@ -654,13 +723,17 @@ export async function finalizeWithdrawalMetadata(
 ): Promise<void> {
   const now = new Date()
   await commitWrites(projectId, accessToken, [
-    // updateMask에 uid를 포함하고 fields에서는 생략하면 해당 필드만 삭제된다.
+    // 상태 조회에 필요한 statusTokenHash만 남기고 UID·닉네임·후임 UID가 포함된
+    // 처리 원본은 완료 즉시 제거한다. updateMask에 넣고 fields에서 생략한 필드는 삭제된다.
     updateWrite(projectId, `withdrawalRequests/${requestId}`, {
       status: 'complete',
       stage: 'complete',
       updatedAt: now,
       completedAt: now,
-    }, ['uid', 'status', 'stage', 'updatedAt', 'completedAt'], { exists: true }),
+    }, [
+      'uid', 'manifestId', 'manifestHash', 'sourceHash', 'preview', 'successorByMeeting',
+      'status', 'stage', 'updatedAt', 'completedAt',
+    ], { exists: true }),
     deleteWrite(projectId, `withdrawalManifests/${manifestId}`),
     deleteWrite(projectId, `withdrawalLocks/${uid}`),
   ], 'WITHDRAWAL_FINALIZE_FAILED')

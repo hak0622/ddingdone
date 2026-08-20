@@ -234,6 +234,9 @@ async function collectIssues(uid: string, source: MeetingSource): Promise<Previe
   if (source.childCollectionIds.some((id) => !KNOWN_CHILD_COLLECTIONS.has(id))) {
     issues.add('UNKNOWN_CHILD_COLLECTION')
   }
+  if (source.settlementDocuments.some((document) => document.id !== 'final')) {
+    issues.add('SETTLEMENT_DOCUMENTS_MISMATCH')
+  }
 
   if (statusOf(source.meeting) === 'settled') {
     if (!source.settlement) {
@@ -377,6 +380,9 @@ export function withdrawalSourceHashInput(sources: MeetingSource[]): string {
       settlement: source.settlement
         ? { id: source.settlement.id, data: source.settlement.data }
         : null,
+      settlementDocuments: [...source.settlementDocuments]
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .map(({ id, data }) => ({ id, data })),
       childCollectionIds: [...source.childCollectionIds].sort(),
     }))
   return stableStringify(normalized)

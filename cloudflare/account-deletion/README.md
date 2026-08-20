@@ -7,9 +7,11 @@ Firebase 익명 사용자의 ID 토큰을 검증하고 탈퇴 영향 범위를 �
 - `POST /withdrawal/confirm`: manifest를 검증하고 삭제 Workflow 시작
 - `GET /withdrawal/status/{requestId}`: Firebase 토큰 또는 상태 토큰으로 진행 상태 조회
 
-현재 Workflow는 일반 멤버가 공유방에서 탈퇴하는 경우를 처리합니다. 방장 이전,
-단독 방 전체 삭제, Cloudinary 사진 삭제는 다음 구현 단계 전까지 확인 요청을
-`SPECIAL_HANDLING_NOT_READY`로 중단합니다.
+Workflow는 일반 멤버의 공유방 나가기, 공유방 방장 이전, 단독 방 전체 삭제를
+처리합니다. 정산 완료 공유방에서는 탈퇴자 식별값을 익명화하고, 단독 방 사진은
+Firestore 방 삭제가 성공한 뒤 Cloudinary에서 삭제하면서 CDN 캐시도 무효화합니다.
+데이터 구조가 예상과 다르거나 숨은 하위 문서가 있으면 `MANUAL_REVIEW_REQUIRED`로
+중단합니다.
 
 한 방의 비용 삭제, 멤버 문서 삭제, 방 집계 갱신, 정산 스냅샷 익명화는 하나의
 Firestore commit으로 처리합니다. Firestore의 500-write 제한 안에서 원자성을
@@ -30,11 +32,18 @@ Workflow가 실제 삭제를 시작하기 전에 실패하면 잠금을 해제�
 npx wrangler secret put FIREBASE_API_KEY
 npx wrangler secret put FIREBASE_CLIENT_EMAIL
 npx wrangler secret put FIREBASE_PRIVATE_KEY
+npx wrangler secret put CLOUDINARY_CLOUD_NAME
+npx wrangler secret put CLOUDINARY_API_KEY
+npx wrangler secret put CLOUDINARY_API_SECRET
 ```
 
 서비스 계정은 전용 계정을 사용하고 Firestore 문서 처리 권한과 Firebase
 Authentication 사용자 삭제 권한만 부여합니다. 프로젝트 Owner·Editor 같은 광범위한
 역할을 부여하지 않습니다.
+
+Cloudinary API Secret은 앱이나 `wrangler.jsonc`에 넣지 않고 Worker Secret으로만
+보관합니다. 삭제는 `ddingdone/{meetingId}/...` 경로만 허용하며 `not found` 응답은
+Workflow 재시도를 위한 멱등 성공으로 처리합니다.
 
 `withdrawalManifests.expiresAt`과 `withdrawalRequests.expiresAt`에는 Firestore TTL
 정책을 설정합니다. 사용자당 manifest는 항상 하나만 유지되고, 상태 조회용 요청
