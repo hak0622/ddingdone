@@ -1,0 +1,4 @@
+# 실제 값은 이 파일이 아니라 Git에서 제외되는 .dev.vars에 입력합니다.
+FIREBASE_API_KEY=
+FIREBASE_CLIENT_EMAIL=
+FIREBASE_PRIVATE_KEY=

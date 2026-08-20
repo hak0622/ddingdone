@@ -20,6 +20,13 @@ service cloud.firestore {
       return exists(path) && get(path).data.status == 'settled';
     }
 
+    // 탈퇴 미리보기 manifest에는 내부 UID, 원본 상태 해시, 일회용 확인값의
+    // 해시가 들어간다. Cloudflare Worker의 서비스 계정(Admin REST)만 접근하고
+    // 앱 클라이언트는 본인 문서라고 해도 직접 읽거나 조작할 수 없다.
+    match /withdrawalManifests/{manifestId} {
+      allow read, write: if false;
+    }
+
     match /meetings/{meetingId} {
       function isValidPhotoUpdate() {
         let changed = request.resource.data.diff(resource.data).affectedKeys();

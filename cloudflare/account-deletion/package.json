@@ -1,0 +1,17 @@
+{
+  "name": "ddingdone-account-deletion",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "types": "wrangler types"
+  },
+  "devDependencies": {
+    "typescript": "~5.7.2",
+    "vitest": "^4.1.8",
+    "wrangler": "^4.0.0"
+  }
+}
