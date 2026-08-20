@@ -3,6 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Asset, Top, Tooltip } from '@toss/tds-mobile'
 import { collection, doc, serverTimestamp, increment, writeBatch } from 'firebase/firestore'
 import { db } from '../lib/firebase'
+import { EXPENSE_SCHEMA_VERSION } from '../lib/expenseOwnership'
 import { useMeeting } from '../hooks/useMeeting'
 import { useUserStore } from '../store/userStore'
 
@@ -101,6 +102,8 @@ export default function ExpenseInput() {
           amount: Number(amount),
           category,
           memo,
+          updatedBy: uid,
+          updatedAt: serverTimestamp(),
         })
         batch.update(doc(db, 'meetings', meetingId), {
           totalAmount: increment(Number(amount) - originalAmount),
@@ -111,8 +114,12 @@ export default function ExpenseInput() {
           amount: Number(amount),
           category,
           paidBy: uid,
+          createdBy: uid,
           memo,
           createdAt: serverTimestamp(),
+          updatedBy: uid,
+          updatedAt: serverTimestamp(),
+          schemaVersion: EXPENSE_SCHEMA_VERSION,
         })
         batch.update(doc(db, 'meetings', meetingId), {
           totalAmount: increment(Number(amount)),

@@ -3,6 +3,24 @@ import { getIdToken } from './firebase'
 export interface UploadedImage {
   url: string
   publicId: string
+  assetId: string
+}
+
+export function parseCloudinaryUploadResponse(data: unknown): UploadedImage {
+  if (!data || typeof data !== 'object') throw new Error('이미지 업로드 응답이 올바르지 않습니다.')
+  const response = data as Record<string, unknown>
+  if (
+    typeof response.secure_url !== 'string' ||
+    typeof response.public_id !== 'string' ||
+    typeof response.asset_id !== 'string'
+  ) {
+    throw new Error('이미지 업로드 응답에 필수 정보가 없습니다.')
+  }
+  return {
+    url: response.secure_url,
+    publicId: response.public_id,
+    assetId: response.asset_id,
+  }
 }
 
 /**
@@ -81,8 +99,7 @@ export async function uploadImage(file: File, meetingId: string): Promise<Upload
   )
 
   if (!res.ok) throw new Error('이미지 업로드 실패')
-  const data = await res.json()
-  return { url: data.secure_url as string, publicId: data.public_id as string }
+  return parseCloudinaryUploadResponse(await res.json())
 }
 
 /**

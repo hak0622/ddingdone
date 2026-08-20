@@ -1,6 +1,7 @@
 import { useCallback, useSyncExternalStore } from 'react'
-import { doc, collection, onSnapshot, query, orderBy, type DocumentSnapshot } from 'firebase/firestore'
+import { doc, collection, onSnapshot, query, orderBy, type DocumentSnapshot, type Timestamp } from 'firebase/firestore'
 import { db } from '../lib/firebase'
+import { getExpenseAuthorUid } from '../lib/expenseOwnership'
 
 export interface Meeting {
   id: string
@@ -10,6 +11,9 @@ export interface Meeting {
   createdBy: string
   photoUrl: string | null
   photoPublicId: string | null
+  photoAssetId: string | null
+  photoUploadedBy: string | null
+  photoUploadedAt: Timestamp | null
   status: 'active' | 'settled'
 }
 
@@ -21,6 +25,7 @@ export interface Expense {
   id: string
   amount: number
   paidBy: string
+  createdBy: string
   memo: string
   category: string
 }
@@ -71,6 +76,9 @@ function mapMeeting(snap: DocumentSnapshot): Meeting | null {
     createdBy: data.createdBy,
     photoUrl: data.photoUrl ?? null,
     photoPublicId: data.photoPublicId ?? null,
+    photoAssetId: data.photoAssetId ?? null,
+    photoUploadedBy: data.photoUploadedBy ?? null,
+    photoUploadedAt: data.photoUploadedAt ?? null,
     status: data.status ?? 'active',
   }
 }
@@ -112,6 +120,7 @@ function startListening(meetingId: string, entry: CacheEntry) {
           id: d.id,
           amount: data.amount,
           paidBy: data.paidBy,
+          createdBy: getExpenseAuthorUid(data),
           memo: data.memo ?? '',
           category: data.category ?? '',
         })

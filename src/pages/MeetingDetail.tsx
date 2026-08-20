@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Asset, BottomSheet, ConfirmDialog, FixedBottomCTA, List, ListRow, TextField, Top, useBottomSheet } from '@toss/tds-mobile'
-import { doc, updateDoc, writeBatch, increment, arrayUnion, arrayRemove } from 'firebase/firestore'
+import { doc, updateDoc, writeBatch, increment, arrayUnion, arrayRemove, serverTimestamp } from 'firebase/firestore'
 import { formatKRW, truncateName } from '../utils/format'
 import { COLORS } from '../styles/tokens'
 import { db } from '../lib/firebase'
@@ -119,8 +119,14 @@ export default function MeetingDetail() {
     setUploading(true)
     try {
       const previousPublicId = meeting?.photoPublicId ?? null
-      const { url, publicId } = await uploadImage(pendingFile, id)
-      await updateDoc(doc(db, 'meetings', id), { photoUrl: url, photoPublicId: publicId })
+      const { url, publicId, assetId } = await uploadImage(pendingFile, id)
+      await updateDoc(doc(db, 'meetings', id), {
+        photoUrl: url,
+        photoPublicId: publicId,
+        photoAssetId: assetId,
+        photoUploadedBy: uid,
+        photoUploadedAt: serverTimestamp(),
+      })
       if (pendingPreview) URL.revokeObjectURL(pendingPreview)
       setPendingFile(null)
       setPendingPreview(null)
