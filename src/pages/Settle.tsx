@@ -1,40 +1,61 @@
 import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { FixedBottomCTA, Top } from '@toss/tds-mobile'
-import { doc, updateDoc } from 'firebase/firestore'
+import { doc, serverTimestamp, writeBatch } from 'firebase/firestore'
 import { db } from '../lib/firebase'
 import { formatKRW } from '../utils/format'
 import { COLORS } from '../styles/tokens'
 import { useMeeting } from '../hooks/useMeeting'
-import { calculateSettlements, type Settlement } from '../utils/settle'
 import { useUserStore } from '../store/userStore'
 import { shareText } from '../lib/bridge'
 import ResultScreen from '../components/ResultScreen'
+import { useSettlementSnapshot } from '../hooks/useSettlementSnapshot'
+import {
+  buildSettlementSnapshot,
+  hashSettlementSnapshot,
+  snapshotToSettlements,
+} from '../utils/settlementSnapshot'
 
 export default function Settle() {
   const { id: meetingId } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { uid } = useUserStore()
-  const { meeting, members, expenses, loading, error } = useMeeting(meetingId)
+  const { meeting, members, expenses, loading: meetingLoading, error: meetingError } = useMeeting(meetingId)
+  const isMember = !!members[uid]
+  const isSettled = meeting?.status === 'settled'
+  const {
+    snapshot: storedSnapshot,
+    loading: snapshotLoading,
+    error: snapshotError,
+  } = useSettlementSnapshot(meetingId, isMember && isSettled)
   const [settling, setSettling] = useState(false)
   const [settleSuccess, setSettleSuccess] = useState(false)
   const [settleError, setSettleError] = useState('')
 
-  const settlements = useMemo<Settlement[]>(() => {
-    if (!expenses.length || !Object.keys(members).length) return []
-    return calculateSettlements(
-      expenses.map((e) => ({ amount: e.amount, paidBy: e.paidBy })),
+  const liveSnapshot = useMemo(
+    () => buildSettlementSnapshot(
+      meeting?.memberUids ?? Object.keys(members),
       members,
-    )
-  }, [expenses, members])
+      expenses.map((expense) => ({ amount: expense.amount, paidBy: expense.paidBy })),
+    ),
+    [meeting?.memberUids, members, expenses],
+  )
 
-  const totalAmount = expenses.reduce((sum, e) => sum + e.amount, 0)
-  const memberCount = Object.keys(members).length
+  // 기존 정산 완료 방은 아직 스냅샷이 없으므로 현재의 변경 불가능한 비용·멤버
+  // 데이터로 계산한다. 신규 정산 완료 방부터 저장된 스냅샷을 우선 사용한다.
+  const effectiveSnapshot = isSettled && storedSnapshot ? storedSnapshot : liveSnapshot
+  const settlements = useMemo(
+    () => snapshotToSettlements(effectiveSnapshot),
+    [effectiveSnapshot],
+  )
+  const totalAmount = effectiveSnapshot.totalAmount
+  const memberCount = effectiveSnapshot.participantCount
   const perPerson = memberCount > 0 ? Math.floor(totalAmount / memberCount) : 0
 
   const myPayments = settlements.filter((s) => s.from === uid)
   const myReceivables = settlements.filter((s) => s.to === uid)
-  const isSettled = meeting?.status === 'settled'
+  const loading = meetingLoading || (isMember && isSettled && snapshotLoading)
+  const error = meetingError || snapshotError
 
   async function handleShare() {
     if (!meeting) return
@@ -56,11 +77,20 @@ export default function Settle() {
   }
 
   async function handleSettle() {
-    if (!meetingId || settling) return
+    if (!meetingId || !uid || !isMember || settling) return
     setSettling(true)
     setSettleError('')
     try {
-      await updateDoc(doc(db, 'meetings', meetingId), { status: 'settled' })
+      const hash = await hashSettlementSnapshot(liveSnapshot)
+      const batch = writeBatch(db)
+      batch.set(doc(db, 'meetings', meetingId, 'settlements', 'final'), {
+        ...liveSnapshot,
+        hash,
+        finalizedBy: uid,
+        settledAt: serverTimestamp(),
+      })
+      batch.update(doc(db, 'meetings', meetingId), { status: 'settled' })
+      await batch.commit()
       setSettleSuccess(true)
     } catch {
       setSettleError('정산 완료 처리하지 못했어요. 다시 시도해주세요.')

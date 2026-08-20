@@ -151,7 +151,10 @@ export default function MeetingDetail() {
     if (!id) return
     closeManageSheet()
     try {
-      await updateDoc(doc(db, 'meetings', id), { status: 'active' })
+      const batch = writeBatch(db)
+      batch.delete(doc(db, 'meetings', id, 'settlements', 'final'))
+      batch.update(doc(db, 'meetings', id), { status: 'active' })
+      await batch.commit()
     } catch {
       showActionError('다시 열지 못했어요. 다시 시도해주세요.')
     }

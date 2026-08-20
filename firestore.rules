@@ -41,6 +41,22 @@ service cloud.firestore {
         );
       }
 
+      function isValidStatusUpdate() {
+        let changed = request.resource.data.diff(resource.data).affectedKeys();
+        let snapshotPath = /databases/$(database)/documents/meetings/$(meetingId)/settlements/final;
+        return !changed.hasAny(['status']) || (
+          resource.data.status == 'active' &&
+          request.resource.data.status == 'settled' &&
+          !exists(snapshotPath) &&
+          existsAfter(snapshotPath)
+        ) || (
+          resource.data.status == 'settled' &&
+          request.resource.data.status == 'active' &&
+          resource.data.createdBy == request.auth.uid &&
+          !existsAfter(snapshotPath)
+        );
+      }
+
       // 초대 링크로 들어온 비멤버도 "참여하기" 화면을 보려면 ID로 단건 조회는 허용한다.
       // list(필터 없는 컬렉션 조회)는 본인이 멤버인 문서만 허용해 전체 덤프를 막는다.
       allow get: if isAuthenticated();
@@ -77,7 +93,8 @@ service cloud.firestore {
         (
           request.auth.uid in resource.data.memberUids &&
           !request.resource.data.diff(resource.data).affectedKeys().hasAny(['createdBy', 'memberUids', 'memberCount']) &&
-          isValidPhotoUpdate()
+          isValidPhotoUpdate() &&
+          isValidStatusUpdate()
         ) ||
         (
           resource.data.status != 'settled' &&
@@ -162,6 +179,48 @@ service cloud.firestore {
           !existsAfter(/databases/$(database)/documents/meetings/$(meetingId)) ||
           (!isSettled(meetingId) && resource.data.paidBy == request.auth.uid)
         );
+      }
+
+      match /settlements/{snapshotId} {
+        allow read: if snapshotId == 'final' && isAuthenticated() && isMember(meetingId);
+
+        // 정산 완료와 같은 원자적 배치에서만 최초 스냅샷을 만들 수 있다. 현재
+        // 방의 총액·인원·UID 순서가 클라이언트가 계산한 값과 다르면 동시 변경이
+        // 있었던 것이므로 배치 전체를 거부하고 다시 계산하게 한다.
+        allow create: if snapshotId == 'final' && isAuthenticated() && isMember(meetingId) &&
+          get(/databases/$(database)/documents/meetings/$(meetingId)).data.status == 'active' &&
+          getAfter(/databases/$(database)/documents/meetings/$(meetingId)).data.status == 'settled' &&
+          request.resource.data.keys().hasOnly([
+            'schemaVersion',
+            'totalAmount',
+            'participantCount',
+            'participantIds',
+            'participantNames',
+            'participantPaidTotals',
+            'transfers',
+            'hash',
+            'finalizedBy',
+            'settledAt'
+          ]) &&
+          request.resource.data.schemaVersion == 1 &&
+          request.resource.data.totalAmount == getAfter(/databases/$(database)/documents/meetings/$(meetingId)).data.totalAmount &&
+          request.resource.data.participantCount == getAfter(/databases/$(database)/documents/meetings/$(meetingId)).data.memberCount &&
+          request.resource.data.participantIds == getAfter(/databases/$(database)/documents/meetings/$(meetingId)).data.memberUids &&
+          request.resource.data.participantNames is map &&
+          request.resource.data.participantPaidTotals is map &&
+          request.resource.data.transfers is list &&
+          request.resource.data.hash is string &&
+          request.resource.data.hash.matches('[0-9a-f]{64}') &&
+          request.resource.data.finalizedBy == request.auth.uid &&
+          request.resource.data.settledAt == request.time;
+
+        allow update: if false;
+
+        // 방장만 정산방을 다시 여는 같은 배치에서 스냅샷을 제거할 수 있다.
+        // 기존 정산 완료 방은 스냅샷이 없으므로 이 삭제 없이도 다시 열 수 있다.
+        allow delete: if snapshotId == 'final' && isAuthenticated() &&
+          get(/databases/$(database)/documents/meetings/$(meetingId)).data.createdBy == request.auth.uid &&
+          getAfter(/databases/$(database)/documents/meetings/$(meetingId)).data.status == 'active';
       }
     }
   }

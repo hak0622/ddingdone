@@ -9,6 +9,7 @@ export interface Meeting {
   date: string
   memo: string
   createdBy: string
+  memberUids: string[]
   photoUrl: string | null
   photoPublicId: string | null
   photoAssetId: string | null
@@ -74,6 +75,7 @@ function mapMeeting(snap: DocumentSnapshot): Meeting | null {
     date: data.date,
     memo: data.memo,
     createdBy: data.createdBy,
+    memberUids: data.memberUids ?? [],
     photoUrl: data.photoUrl ?? null,
     photoPublicId: data.photoPublicId ?? null,
     photoAssetId: data.photoAssetId ?? null,
