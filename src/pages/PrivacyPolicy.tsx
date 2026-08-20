@@ -1,29 +1,25 @@
 import { Top } from '@toss/tds-mobile'
 
-const SECTIONS = [
+const PRIVACY_POLICY_SECTIONS = [
   {
-    title: '1. 수집하는 개인정보 항목',
-    body: '띵돈은 서비스 제공을 위해 다음 정보를 수집합니다.\n\n• 닉네임: 이용자가 직접 입력한 이름 (실명 불필요)\n• 모임 사진: 이용자가 선택하여 업로드한 사진 (선택 사항)\n• 지출 내역: 이용자가 입력한 금액, 카테고리, 메모\n• 기기 식별자: 앱 설치 단위로 발급되는 익명 식별 키 (개인을 특정할 수 없으며, 토스 계정과는 연결되지 않음)',
+    title: '1. 수집하는 정보',
+    body: '띵돈은 서비스 제공을 위해 Firebase 익명 사용자 ID, 닉네임, 정산방 및 비용 정보, 정산 결과와 이용자가 선택한 대표 사진을 처리합니다. 인증과 보안 과정에서 IP 주소 등의 접속정보가 자동 처리될 수 있습니다.\n\n토스 계정의 실명, 전화번호, 이메일 주소와 앱인토스 기기 ID는 직접 수집하지 않습니다.',
   },
   {
-    title: '2. 개인정보 수집 및 이용 목적',
-    body: '수집한 정보는 다음 목적으로만 사용합니다.\n\n• 모임별 지출 기록 및 정산 금액 계산\n• 같은 모임 참여자 간 닉네임 표시\n\n익명 식별 키는 앱 설치 단위로 발급되어, 앱을 재설치하거나 기기를 변경하면 새로운 식별 키가 발급되며 이전 데이터에는 다시 접근할 수 없습니다.',
+    title: '2. 이용 목적',
+    body: '수집한 정보는 사용자 식별, 정산방 운영, 비용 기록 공유, 정산 금액 계산, 사진 관리와 회원 탈퇴 처리에만 사용합니다. 광고 목적으로 사용하거나 판매하지 않습니다.',
   },
   {
-    title: '3. 개인정보 보유 및 이용 기간',
-    body: '이용자가 서비스를 이용하는 동안 데이터를 보유합니다. 서비스 내에서 모임을 직접 삭제하면 해당 모임의 모든 데이터(지출 내역, 사진 포함)가 즉시 삭제됩니다.',
+    title: '3. 보유 기간과 삭제',
+    body: '정보는 서비스 이용 기간 동안 보관하며 삭제 또는 탈퇴 시 파기합니다. 탈퇴하면 닉네임, 멤버 정보와 본인이 작성한 비용이 삭제되고, 혼자 참여한 방은 사진을 포함해 모두 삭제됩니다.\n\n다른 참여자가 있는 방은 공동 기록을 위해 유지됩니다. 정산이 끝난 방에서는 탈퇴자의 이름과 식별값을 “탈퇴한 사용자”로 변경하며, 공동방의 사진·이름·메모는 방이 삭제될 때까지 남을 수 있습니다. 탈퇴 처리 결과는 개인정보를 제거한 뒤 최대 30일 보관합니다.',
   },
   {
     title: '4. 이용자의 권리',
-    body: '이용자는 언제든지 앱 내에서 닉네임을 수정하거나 모임 데이터를 삭제할 수 있습니다. 데이터 삭제 요청은 앱 내 삭제 기능을 통해 직접 처리하실 수 있습니다.',
+    body: '이용자는 앱에서 닉네임과 본인이 작성한 비용을 수정·삭제하고, 권한이 있는 정산방을 삭제할 수 있습니다. 설정의 “회원 탈퇴”에서 직접 탈퇴할 수 있으며, 추가적인 열람·수정·삭제 요청은 아래 이메일로 문의할 수 있습니다.',
   },
   {
     title: '5. 문의',
-    body: '개인정보 처리에 관한 문의사항은 아래 이메일로 연락해 주세요.\n\nseounghak062@gmail.com',
-  },
-  {
-    title: '부칙',
-    body: '이 방침은 2026년 6월 28일부터 적용됩니다.',
+    body: '이메일: seounghak062@gmail.com',
   },
 ]
 
@@ -31,15 +27,18 @@ export default function PrivacyPolicy() {
   return (
     <>
       <Top title={<Top.TitleParagraph size={22}>개인정보처리방침</Top.TitleParagraph>} />
-      <div style={{ padding: '20px 20px 48px' }}>
-        <p style={{ fontSize: 13, color: '#888', margin: '0 0 24px' }}>최종 업데이트: 2026년 6월 28일</p>
-        {SECTIONS.map((s) => (
-          <div key={s.title} style={{ marginBottom: 24 }}>
-            <p style={{ fontSize: 15, fontWeight: 700, color: '#191919', margin: '0 0 8px' }}>{s.title}</p>
-            <p style={{ fontSize: 14, color: '#555', margin: 0, lineHeight: 1.7, whiteSpace: 'pre-line' }}>{s.body}</p>
-          </div>
+      <main style={{ padding: '20px 20px 48px' }}>
+        {PRIVACY_POLICY_SECTIONS.map((section) => (
+          <section key={section.title} style={{ marginBottom: 26 }}>
+            <h2 style={{ fontSize: 15, fontWeight: 700, color: '#191919', margin: '0 0 8px' }}>
+              {section.title}
+            </h2>
+            <p style={{ fontSize: 14, color: '#555', margin: 0, lineHeight: 1.75, whiteSpace: 'pre-line' }}>
+              {section.body}
+            </p>
+          </section>
         ))}
-      </div>
+      </main>
     </>
   )
 }
