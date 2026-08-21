@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  cleanupExpiredWithdrawalMetadata,
   deleteSoloMeeting,
   finalizeWithdrawalMetadata,
   processSharedMemberDeparture,
@@ -9,6 +10,89 @@ import type { FirestoreRecord, MeetingSource } from './types'
 function record(id: string, data: Record<string, unknown>): FirestoreRecord {
   return { id, data, updateTime: `2026-08-20T00:00:0${id.length}.000Z` }
 }
+
+describe('cleanupExpiredWithdrawalMetadata', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('만료된 미확정 manifest와 익명화된 완료 요청만 삭제한다', async () => {
+    const expiredAt = '2026-08-20T00:00:00.000Z'
+    const document = (
+      collectionId: string,
+      id: string,
+      fields: Record<string, unknown>,
+    ) => ({
+      document: {
+        name: `projects/project-1/databases/(default)/documents/${collectionId}/${id}`,
+        updateTime: `2026-08-20T01:00:0${id.length}.000Z`,
+        fields,
+      },
+    })
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input)
+      const body = init?.body ? JSON.parse(String(init.body)) as {
+        structuredQuery?: { from?: Array<{ collectionId?: string }> }
+      } : null
+      const collectionId = body?.structuredQuery?.from?.[0]?.collectionId
+      if (url.endsWith(':runQuery') && collectionId === 'withdrawalManifests') {
+        return new Response(JSON.stringify([
+          document('withdrawalManifests', 'safe-manifest', {
+            status: { stringValue: 'previewed' },
+            expiresAt: { timestampValue: expiredAt },
+          }),
+          document('withdrawalManifests', 'queued-manifest', {
+            status: { stringValue: 'queued' },
+            expiresAt: { timestampValue: expiredAt },
+          }),
+        ]), { status: 200 })
+      }
+      if (url.endsWith(':runQuery') && collectionId === 'withdrawalRequests') {
+        return new Response(JSON.stringify([
+          document('withdrawalRequests', 'safe-request', {
+            status: { stringValue: 'complete' },
+            stage: { stringValue: 'complete' },
+            expiresAt: { timestampValue: expiredAt },
+          }),
+          document('withdrawalRequests', 'unsafe-complete-request', {
+            status: { stringValue: 'complete' },
+            stage: { stringValue: 'complete' },
+            uid: { stringValue: 'user-1' },
+            expiresAt: { timestampValue: expiredAt },
+          }),
+          document('withdrawalRequests', 'failed-request', {
+            status: { stringValue: 'failed' },
+            stage: { stringValue: 'manual-recovery-required' },
+            expiresAt: { timestampValue: expiredAt },
+          }),
+        ]), { status: 200 })
+      }
+      return new Response(null, { status: 200 })
+    })
+
+    await expect(cleanupExpiredWithdrawalMetadata(
+      'project-1',
+      'access-token',
+      new Date('2026-08-21T00:00:00.000Z'),
+    )).resolves.toEqual({
+      scannedManifestCount: 2,
+      scannedRequestCount: 3,
+      deletedManifestCount: 1,
+      deletedRequestCount: 1,
+      skippedManifestCount: 1,
+      skippedRequestCount: 2,
+    })
+
+    const deletedPaths = fetchMock.mock.calls.flatMap(([, init]) => {
+      if (!init?.body) return []
+      const body = JSON.parse(String(init.body)) as { writes?: Array<{ delete?: string }> }
+      return (body.writes ?? []).flatMap((write) => write.delete ? [write.delete] : [])
+    })
+    expect(deletedPaths).toEqual([
+      'projects/project-1/databases/(default)/documents/withdrawalManifests/safe-manifest',
+      'projects/project-1/databases/(default)/documents/withdrawalRequests/safe-request',
+    ])
+    expect(deletedPaths.some((path) => path.includes('withdrawalLocks'))).toBe(false)
+  })
+})
 
 describe('processSharedMemberDeparture', () => {
   afterEach(() => vi.restoreAllMocks())

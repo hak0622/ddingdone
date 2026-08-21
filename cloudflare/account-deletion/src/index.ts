@@ -2,6 +2,7 @@ import { AuthenticationError, createGoogleAccessToken, readBearerToken, verifyFi
 import { randomNonce, sha256Hex, stableStringify } from './crypto'
 import {
   claimWithdrawalRequest,
+  cleanupExpiredWithdrawalMetadata,
   createWithdrawalManifest,
   FirestoreError,
   getFirestoreDocument,
@@ -318,5 +319,24 @@ export default {
     return url.pathname === '/withdrawal/preview'
       ? createPreview(request, env, origin)
       : confirmWithdrawal(request, env, origin)
+  },
+  async scheduled(controller: ScheduledController, env: Env): Promise<void> {
+    const cleanupId = `scheduled-cleanup:${controller.scheduledTime}`
+    try {
+      const accessToken = await createGoogleAccessToken(
+        env.FIREBASE_CLIENT_EMAIL,
+        env.FIREBASE_PRIVATE_KEY,
+      )
+      const result = await cleanupExpiredWithdrawalMetadata(
+        env.FIREBASE_PROJECT_ID,
+        accessToken,
+        new Date(controller.scheduledTime),
+      )
+      console.log(JSON.stringify({ cleanupId, result: 'success', stage: 'cleanup', ...result }))
+    } catch (error) {
+      const errorCode = error instanceof FirestoreError ? error.code : 'INTERNAL_ERROR'
+      console.error(JSON.stringify({ cleanupId, result: 'error', stage: 'cleanup', errorCode }))
+      throw error
+    }
   },
 } satisfies ExportedHandler<Env>

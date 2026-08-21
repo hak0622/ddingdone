@@ -45,9 +45,11 @@ Cloudinary API Secret은 앱이나 `wrangler.jsonc`에 넣지 않고 Worker Secr
 보관합니다. 삭제는 `ddingdone/{meetingId}/...` 경로만 허용하며 `not found` 응답은
 Workflow 재시도를 위한 멱등 성공으로 처리합니다.
 
-`withdrawalManifests.expiresAt`과 `withdrawalRequests.expiresAt`에는 Firestore TTL
-정책을 설정합니다. 사용자당 manifest는 항상 하나만 유지되고, 상태 조회용 요청
-문서는 30일 뒤 자동 정리됩니다.
+매일 오전 3시 17분(KST)에 Cloudflare Cron이 만료 문서를 정리합니다. 15분이 지난
+미확정 `withdrawalManifests`와 30일이 지난 완료 상태의 `withdrawalRequests`만
+삭제합니다. 처리 중·실패 요청과 `withdrawalLocks`, 사용자 방 데이터는 정리 대상이
+아닙니다. 한 번에 컬렉션별 최대 240개만 처리하며 다음 실행에서 이어서 정리합니다.
+별도의 Firestore TTL 정책이나 추가 Secret은 필요하지 않습니다.
 
 운영에서는 먼저 이 저장소의 Firestore 규칙을 배포해 탈퇴 중인 계정과 방의 일반
 클라이언트 쓰기를 차단한 다음 Worker를 배포합니다. 규칙보다 Worker를 먼저 공개하면

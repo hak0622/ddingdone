@@ -14,6 +14,7 @@ const MAX_SETTLEMENT_DOCUMENTS = 10
 const MAX_CHILD_COLLECTIONS = 100
 const PAGE_SIZE = 300
 const MAX_ATOMIC_WRITES = 500
+const MAX_CLEANUP_DOCUMENTS_PER_COLLECTION = 240
 const FIRESTORE_API = 'https://firestore.googleapis.com/v1'
 const EXTERNAL_REQUEST_TIMEOUT_MS = 10_000
 
@@ -191,6 +192,116 @@ function asRunQueryDocuments(value: unknown): FirestoreRecord[] {
     if (document) documents.push(decodeDocument(document))
   }
   return documents
+}
+
+async function queryExpiredDocuments(
+  projectId: string,
+  collectionId: 'withdrawalManifests' | 'withdrawalRequests',
+  accessToken: string,
+  now: Date,
+): Promise<FirestoreRecord[]> {
+  const response = await fetch(`${documentBase(projectId)}:runQuery`, {
+    method: 'POST',
+    headers: { ...authorization(accessToken), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId }],
+        where: {
+          fieldFilter: {
+            field: { fieldPath: 'expiresAt' },
+            op: 'LESS_THAN_OR_EQUAL',
+            value: { timestampValue: now.toISOString() },
+          },
+        },
+        orderBy: [{ field: { fieldPath: 'expiresAt' }, direction: 'ASCENDING' }],
+        limit: MAX_CLEANUP_DOCUMENTS_PER_COLLECTION,
+      },
+    }),
+    signal: requestSignal(),
+  })
+  return asRunQueryDocuments(await readJson(response, 'CLEANUP_QUERY_FAILED'))
+}
+
+function isExpired(record: FirestoreRecord, now: Date): boolean {
+  const expiresAt = record.data.expiresAt
+  if (typeof expiresAt !== 'string') return false
+  const expiresAtMs = Date.parse(expiresAt)
+  return Number.isFinite(expiresAtMs) && expiresAtMs <= now.getTime()
+}
+
+function isSafeExpiredManifest(record: FirestoreRecord, now: Date): boolean {
+  return record.data.status === 'previewed' && isExpired(record, now)
+}
+
+function isSafeExpiredRequest(record: FirestoreRecord, now: Date): boolean {
+  return record.data.status === 'complete' &&
+    record.data.stage === 'complete' &&
+    record.data.uid === undefined &&
+    record.data.manifestId === undefined &&
+    record.data.preview === undefined &&
+    record.data.successorByMeeting === undefined &&
+    isExpired(record, now)
+}
+
+async function deleteCleanupDocuments(
+  projectId: string,
+  collectionId: 'withdrawalManifests' | 'withdrawalRequests',
+  accessToken: string,
+  records: FirestoreRecord[],
+): Promise<void> {
+  await commitWrites(projectId, accessToken, records.map((record) => deleteWrite(
+    projectId,
+    `${collectionId}/${encodeURIComponent(record.id)}`,
+    // 조회 뒤 같은 ID로 새 문서가 생성되거나 상태가 바뀌면 삭제하지 않는다.
+    { updateTime: record.updateTime! },
+  )), 'CLEANUP_DELETE_FAILED')
+}
+
+export interface WithdrawalCleanupResult {
+  scannedManifestCount: number
+  scannedRequestCount: number
+  deletedManifestCount: number
+  deletedRequestCount: number
+  skippedManifestCount: number
+  skippedRequestCount: number
+}
+
+export async function cleanupExpiredWithdrawalMetadata(
+  projectId: string,
+  accessToken: string,
+  now: Date,
+): Promise<WithdrawalCleanupResult> {
+  const [manifests, requests] = await Promise.all([
+    queryExpiredDocuments(projectId, 'withdrawalManifests', accessToken, now),
+    queryExpiredDocuments(projectId, 'withdrawalRequests', accessToken, now),
+  ])
+  const safeManifests = manifests.filter((record) =>
+    Boolean(record.updateTime) && isSafeExpiredManifest(record, now))
+  const safeRequests = requests.filter((record) =>
+    Boolean(record.updateTime) && isSafeExpiredRequest(record, now))
+
+  // 컬렉션별로 커밋해 한쪽의 동시 변경이 다른 쪽 정리까지 막지 않게 한다.
+  await deleteCleanupDocuments(
+    projectId,
+    'withdrawalManifests',
+    accessToken,
+    safeManifests,
+  )
+  await deleteCleanupDocuments(
+    projectId,
+    'withdrawalRequests',
+    accessToken,
+    safeRequests,
+  )
+
+  return {
+    scannedManifestCount: manifests.length,
+    scannedRequestCount: requests.length,
+    deletedManifestCount: safeManifests.length,
+    deletedRequestCount: safeRequests.length,
+    skippedManifestCount: manifests.length - safeManifests.length,
+    skippedRequestCount: requests.length - safeRequests.length,
+  }
 }
 
 async function queryMeetings(
