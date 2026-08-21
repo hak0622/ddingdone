@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Top } from '@toss/tds-mobile'
+import { Loader, Top } from '@toss/tds-mobile'
 import { useNavigate } from 'react-router-dom'
 import {
   AccountDeletionError,
@@ -162,7 +162,7 @@ function StatusView({ status, error, cleanupStatus, onRetry, onRestart }: {
   return (
     <div style={{ padding: '72px 28px', textAlign: 'center' }}>
       <div style={{ width: 64, height: 64, margin: '0 auto 22px', borderRadius: '50%', display: 'grid', placeItems: 'center', background: complete ? '#eaf8ef' : failed ? '#fff0f0' : '#eef6ff', color: complete ? COLORS.success : failed ? COLORS.error : COLORS.primary, fontSize: 28, fontWeight: 700 }}>
-        {complete ? '✓' : failed ? '!' : '…'}
+        {complete ? '✓' : failed ? '!' : <Loader size="small" type="primary" />}
       </div>
       <h2 style={{ margin: 0, fontSize: 22 }}>{title}</h2>
       <p style={{ margin: '12px 0 0', color: '#666', fontSize: 14, lineHeight: 1.65 }}>{description}</p>
@@ -314,19 +314,37 @@ export default function AccountDeletion() {
       <main style={{ padding: '20px 20px 48px' }}>
         {!preview ? (
           <>
-            <h2 style={{ margin: '8px 0 12px', fontSize: 22 }}>탈퇴 전에 확인해주세요</h2>
+            <h2 style={{ margin: '8px 0 12px', fontSize: 22 }}>탈퇴 전 안내</h2>
             <p style={{ margin: 0, color: '#555', fontSize: 14, lineHeight: 1.7 }}>
-              탈퇴하면 내가 작성한 비용과 멤버 정보가 삭제되며 복구할 수 없어요. 다른 사람이 참여한 정산방과 정산 기록은 안전하게 유지돼요.
+              회원 탈퇴 후에는 계정과 삭제된 데이터를 복구할 수 없어요. 참여한 정산방은 아래와 같이 처리돼요.
             </p>
             <ul style={{ margin: '24px 0', paddingLeft: 20, color: '#555', fontSize: 14, lineHeight: 1.9 }}>
-              <li>나만 참여한 방은 사진을 포함해 모두 삭제돼요.</li>
-              <li>내가 방장인 공유방은 다른 참여자에게 방장이 이전돼요.</li>
-              <li>정산이 끝난 공유방은 금액 기록을 유지하고 내 정보를 익명화해요.</li>
+              <li>혼자 사용한 정산방은 비용 내역과 사진까지 모두 삭제돼요.</li>
+              <li>
+                다른 참여자가 있는 정산방은 그대로 유지돼요.<br />
+                내가 방장이라면 다른 참여자에게 방장 권한이 이전돼요.
+              </li>
+              <li>완료된 정산 기록은 유지되지만 내 정보는 알아볼 수 없도록 처리돼요.</li>
             </ul>
             <PrimaryButton disabled={loading} onClick={handlePreview}>
-              {loading ? '확인 중...' : '삭제될 내용 확인하기'}
+              {loading ? '확인 중...' : '계속하기'}
             </PrimaryButton>
-            <button type="button" onClick={() => navigate('/settings')} style={{ width: '100%', marginTop: 10, padding: 14, border: 0, background: 'none', color: COLORS.textSecondary, fontSize: 14 }}>취소</button>
+            <button
+              type="button"
+              onClick={() => navigate('/settings')}
+              style={{
+                width: '100%',
+                height: 52,
+                marginTop: 8,
+                border: 0,
+                background: 'transparent',
+                color: '#6B7684',
+                fontSize: 16,
+                fontWeight: 600,
+              }}
+            >
+              닫기
+            </button>
           </>
         ) : (
           <>

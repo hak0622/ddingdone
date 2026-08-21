@@ -98,6 +98,7 @@ export default function ExpenseInput() {
     try {
       const batch = writeBatch(db)
       if (editId) {
+        const amountDifference = Number(amount) - originalAmount
         batch.update(doc(db, 'meetings', meetingId, 'expenses', editId), {
           amount: Number(amount),
           category,
@@ -105,9 +106,13 @@ export default function ExpenseInput() {
           updatedBy: uid,
           updatedAt: serverTimestamp(),
         })
-        batch.update(doc(db, 'meetings', meetingId), {
-          totalAmount: increment(Number(amount) - originalAmount),
-        })
+        // 메모나 카테고리만 수정한 경우에는 totalAmount가 바뀌지 않으므로
+        // 방 문서에 increment(0) 쓰기를 보내지 않는다.
+        if (amountDifference !== 0) {
+          batch.update(doc(db, 'meetings', meetingId), {
+            totalAmount: increment(amountDifference),
+          })
+        }
       } else {
         const expenseRef = doc(collection(db, 'meetings', meetingId, 'expenses'))
         batch.set(expenseRef, {
