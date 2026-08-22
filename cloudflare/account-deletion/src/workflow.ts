@@ -103,16 +103,42 @@ function currentSuccessor(
   throw new NonRetryableError('INVALID_SUCCESSOR')
 }
 
+function logStage(
+  requestId: string,
+  stage: string,
+  startedAt: number,
+  extra: Record<string, unknown> = {},
+): void {
+  console.log(JSON.stringify({
+    event: 'account-deletion-timing',
+    requestId,
+    stage,
+    durationMs: Date.now() - startedAt,
+    result: 'success',
+    ...extra,
+  }))
+}
+
 export class AccountDeletionWorkflow extends WorkflowEntrypoint<Env, WithdrawalWorkflowParams> {
   async run(event: WorkflowEvent<WithdrawalWorkflowParams>, step: WorkflowStep): Promise<{
     status: 'complete'
     processedMeetingCount: number
   }> {
     const { requestId } = event.payload
+    const workflowStartedAt = event.timestamp.getTime()
     let processingStarted = false
+
+    console.log(JSON.stringify({
+      event: 'account-deletion-timing',
+      requestId,
+      stage: 'workflow-started',
+      queueDelayMs: Math.max(0, Date.now() - workflowStartedAt),
+      result: 'success',
+    }))
 
     try {
       const meetingPlan = await step.do('prepare withdrawal processing', SENSITIVE_RETRY, async () => {
+        const startedAt = Date.now()
         const accessToken = await createGoogleAccessToken(
           this.env.FIREBASE_CLIENT_EMAIL,
           this.env.FIREBASE_PRIVATE_KEY,
@@ -133,6 +159,7 @@ export class AccountDeletionWorkflow extends WorkflowEntrypoint<Env, WithdrawalW
           context.uid,
           requestId,
         )
+        logStage(requestId, 'prepare', startedAt, { meetingCount: context.meetings.length })
         return context.meetings.map((meeting): WorkflowMeetingPlan => ({
           meetingId: meeting.meetingId,
           requestedSuccessorUid: context.successorByMeeting[meeting.meetingId] ?? null,
@@ -145,6 +172,7 @@ export class AccountDeletionWorkflow extends WorkflowEntrypoint<Env, WithdrawalW
       )
       for (const meeting of orderedMeetings) {
         const processed = await step.do(`process meeting ${meeting.meetingId}`, RETRY, async () => {
+          const startedAt = Date.now()
           const accessToken = await createGoogleAccessToken(
             this.env.FIREBASE_CLIENT_EMAIL,
             this.env.FIREBASE_PRIVATE_KEY,
@@ -236,6 +264,11 @@ export class AccountDeletionWorkflow extends WorkflowEntrypoint<Env, WithdrawalW
               )
             }
             transactionFinished = true
+            logStage(requestId, 'meeting', startedAt, {
+              meetingId: meeting.meetingId,
+              action: currentPreview.action,
+              deletedExpenseCount: result.deletedExpenseCount,
+            })
             return {
               action: currentPreview.action,
               deletedExpenseCount: result.deletedExpenseCount,
@@ -256,6 +289,7 @@ export class AccountDeletionWorkflow extends WorkflowEntrypoint<Env, WithdrawalW
         if (processed.action === 'delete_solo_room' && processed.photoPublicId) {
           const photoPublicId = processed.photoPublicId
           await step.do(`delete meeting photo ${meeting.meetingId}`, RETRY, async () => {
+            const startedAt = Date.now()
             await deleteCloudinaryMeetingImage(
               this.env.CLOUDINARY_CLOUD_NAME,
               this.env.CLOUDINARY_API_KEY,
@@ -263,26 +297,38 @@ export class AccountDeletionWorkflow extends WorkflowEntrypoint<Env, WithdrawalW
               meeting.meetingId,
               photoPublicId,
             )
+            logStage(requestId, 'cloudinary-photo', startedAt, { meetingId: meeting.meetingId })
             return { deleted: true }
           })
         }
       }
 
       await step.do('delete auth and finalize withdrawal', RETRY, async () => {
+        const startedAt = Date.now()
+        let operationStartedAt = Date.now()
         const accessToken = await createGoogleAccessToken(
           this.env.FIREBASE_CLIENT_EMAIL,
           this.env.FIREBASE_PRIVATE_KEY,
         )
+        logStage(requestId, 'finalize-access-token', operationStartedAt)
+
+        operationStartedAt = Date.now()
         const request = await getFirestoreDocument(
           this.env.FIREBASE_PROJECT_ID,
           `withdrawalRequests/${requestId}`,
           accessToken,
         )
+        logStage(requestId, 'finalize-request-read', operationStartedAt)
         if (request?.data.status === 'complete' && request.data.uid === undefined) {
+          logStage(requestId, 'auth-and-finalize', startedAt, {
+            meetingCount: orderedMeetings.length,
+            alreadyFinalized: true,
+          })
           return { finalized: true }
         }
         const context = requestContext(request)
 
+        operationStartedAt = Date.now()
         await updateWithdrawalRequestStatus(
           this.env.FIREBASE_PROJECT_ID,
           accessToken,
@@ -290,7 +336,13 @@ export class AccountDeletionWorkflow extends WorkflowEntrypoint<Env, WithdrawalW
           'finalizing',
           'deleting-auth-account',
         )
+        logStage(requestId, 'finalize-status-write', operationStartedAt)
+
+        operationStartedAt = Date.now()
         await deleteFirebaseUser(this.env.FIREBASE_PROJECT_ID, context.uid, accessToken)
+        logStage(requestId, 'finalize-auth-delete', operationStartedAt)
+
+        operationStartedAt = Date.now()
         await finalizeWithdrawalMetadata(
           this.env.FIREBASE_PROJECT_ID,
           accessToken,
@@ -298,15 +350,16 @@ export class AccountDeletionWorkflow extends WorkflowEntrypoint<Env, WithdrawalW
           requestId,
           context.manifestId,
         )
+        logStage(requestId, 'finalize-metadata-cleanup', operationStartedAt)
+        logStage(requestId, 'auth-and-finalize', startedAt, {
+          meetingCount: orderedMeetings.length,
+        })
         return { finalized: true }
       })
 
-      console.log(JSON.stringify({
-        requestId,
-        stage: 'complete',
-        documentCount: orderedMeetings.length,
-        result: 'success',
-      }))
+      logStage(requestId, 'workflow-total', workflowStartedAt, {
+        meetingCount: orderedMeetings.length,
+      })
       return { status: 'complete', processedMeetingCount: orderedMeetings.length }
     } catch (error) {
       const errorCode = error instanceof Error ? error.message : 'WORKFLOW_FAILED'
@@ -358,7 +411,14 @@ export class AccountDeletionWorkflow extends WorkflowEntrypoint<Env, WithdrawalW
           return { retainedAccountLock: true }
         })
       }
-      console.error(JSON.stringify({ requestId, stage: 'workflow', result: 'error', errorCode }))
+      console.error(JSON.stringify({
+        event: 'account-deletion-timing',
+        requestId,
+        stage: 'workflow-total',
+        durationMs: Date.now() - workflowStartedAt,
+        result: 'error',
+        errorCode,
+      }))
       throw error
     }
   }
