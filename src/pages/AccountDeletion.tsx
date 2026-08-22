@@ -219,7 +219,7 @@ export default function AccountDeletion() {
           setStatus(next)
           setError('')
           if (!TERMINAL_STATUSES.has(next.status)) {
-            timer = window.setTimeout(poll, 1500)
+            timer = window.setTimeout(poll, 1000)
           }
         }
       } catch (pollError) {

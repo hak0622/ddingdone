@@ -25,11 +25,6 @@ service cloud.firestore {
         !exists(/databases/$(database)/documents/withdrawalLocks/$(request.auth.uid));
     }
 
-    function isMeetingWriteUnlocked(meetingId) {
-      let path = /databases/$(database)/documents/meetings/$(meetingId);
-      return !exists(path) || !('withdrawalLockRequestId' in get(path).data);
-    }
-
     // 탈퇴 미리보기 manifest에는 내부 UID, 원본 상태 해시, 일회용 확인값의
     // 해시가 들어간다. Cloudflare Worker의 서비스 계정(Admin REST)만 접근하고
     // 앱 클라이언트는 본인 문서라고 해도 직접 읽거나 조작할 수 없다.
@@ -115,7 +110,7 @@ service cloud.firestore {
       // 정확히 -1인지를 같이 검증해 "정확히 본인 uid 하나만" 빠졌는지 확인한다 —
       // 그냥 본인이 결과에서 빠졌는지만 보면, 나가면서 동시에 다른 멤버까지 같이
       // 쫓아내도 통과해버린다.
-      allow update: if isAccountWriteUnlocked() && isMeetingWriteUnlocked(meetingId) && (
+      allow update: if isAccountWriteUnlocked() && (
         (
           request.auth.uid in resource.data.memberUids &&
           !request.resource.data.diff(resource.data).affectedKeys().hasAny([
@@ -149,7 +144,7 @@ service cloud.firestore {
       );
 
       // 모임 생성자만 통째로 삭제 가능
-      allow delete: if isAccountWriteUnlocked() && isMeetingWriteUnlocked(meetingId) &&
+      allow delete: if isAccountWriteUnlocked() &&
         resource.data.createdBy == request.auth.uid;
 
       match /members/{memberId} {
@@ -159,7 +154,7 @@ service cloud.firestore {
         // "가짜 멤버"를 끼워넣어 1인당 정산 금액(perPerson)을 조작할 수 있다 —
         // perPerson은 memberUids가 아니라 members 서브컬렉션 문서 수로 계산되기 때문.
         // joinAsNew는 멤버 추가와 같은 배치이므로 isMember의 getAfter 분기로 정상 통과한다.
-        allow create, update: if isAccountWriteUnlocked() && isMeetingWriteUnlocked(meetingId) &&
+        allow create, update: if isAccountWriteUnlocked() &&
           isMember(meetingId) && memberId == request.auth.uid;
         // 모임 생성자의 전체 삭제(handleDeleteMeeting), 또는 본인이 나가기
         // (leaveMeeting)일 때만 허용한다. 본인 삭제는 같은 배치에서 meetings
@@ -167,7 +162,7 @@ service cloud.firestore {
         // 둔 채 본인 members 문서만 단독으로 지우면, isMember() 통과는 유지하면서
         // (여전히 지출 추가 가능) perPerson 분모(members 문서 수)에서만 빠지는
         // 식으로 정산 부담을 다른 멤버에게 떠넘길 수 있기 때문이다.
-        allow delete: if isAccountWriteUnlocked() && isMeetingWriteUnlocked(meetingId) && (
+        allow delete: if isAccountWriteUnlocked() && (
           get(/databases/$(database)/documents/meetings/$(meetingId)).data.createdBy == request.auth.uid ||
           (
             memberId == request.auth.uid &&
@@ -178,25 +173,58 @@ service cloud.firestore {
       }
 
       match /expenses/{expenseId} {
+        function meetingBefore() {
+          return get(/databases/$(database)/documents/meetings/$(meetingId)).data;
+        }
+
+        function meetingAfter() {
+          return getAfter(/databases/$(database)/documents/meetings/$(meetingId)).data;
+        }
+
+        function aggregatesMatchCreate() {
+          return meetingAfter().expenseCount == meetingBefore().expenseCount + 1 &&
+            meetingAfter().totalAmount == meetingBefore().totalAmount + request.resource.data.amount;
+        }
+
+        function aggregatesMatchUpdate() {
+          let changed = request.resource.data.diff(resource.data).affectedKeys();
+          return meetingAfter().expenseCount == meetingBefore().expenseCount && (
+            (
+              changed.hasAny(['amount']) &&
+              meetingAfter().totalAmount == meetingBefore().totalAmount +
+                request.resource.data.amount - resource.data.amount
+            ) || (
+              !changed.hasAny(['amount']) &&
+              meetingAfter().totalAmount == meetingBefore().totalAmount
+            )
+          );
+        }
+
+        function aggregatesMatchDelete() {
+          return meetingAfter().expenseCount == meetingBefore().expenseCount - 1 &&
+            meetingAfter().totalAmount == meetingBefore().totalAmount - resource.data.amount;
+        }
+
         // 비멤버도 참여 전 화면에서 읽기를 시도할 수 있어 읽기는 열어두고, 쓰기만 멤버로 제한
         allow read: if isAuthenticated();
 
         // 신규 비용은 결제자와 작성자를 모두 본인 UID로 고정한다. 2026-06-29 운영
         // 시작 당시 문서에는 createdBy가 없으므로 기존 문서는 그대로 호환하되,
         // 신규 문서부터 명시적인 작성자를 저장한다.
-        allow create: if isAccountWriteUnlocked() && isMeetingWriteUnlocked(meetingId) &&
+        allow create: if isAccountWriteUnlocked() &&
           isMember(meetingId) && !isSettled(meetingId) &&
           request.resource.data.paidBy == request.auth.uid &&
           request.resource.data.createdBy == request.auth.uid &&
           request.resource.data.createdAt == request.time &&
           request.resource.data.updatedBy == request.auth.uid &&
           request.resource.data.updatedAt == request.time &&
-          request.resource.data.schemaVersion == 2;
+          request.resource.data.schemaVersion == 2 &&
+          aggregatesMatchCreate();
 
         // 일반 수정(금액/카테고리 등)은 "내 비용"일 때만, 정산 전에만 허용한다.
         // paidBy·createdBy·createdAt·schemaVersion은 생성 후 바꿀 수 없다. 기존
         // 문서에 createdBy가 없더라도 그 필드를 추가하지 않는 수정은 정상 통과한다.
-        allow update: if isAccountWriteUnlocked() && isMeetingWriteUnlocked(meetingId) &&
+        allow update: if isAccountWriteUnlocked() &&
           isMember(meetingId) &&
           resource.data.paidBy == request.auth.uid &&
           request.resource.data.paidBy == request.auth.uid &&
@@ -206,14 +234,15 @@ service cloud.firestore {
             .hasOnly(['amount', 'category', 'memo', 'updatedBy', 'updatedAt']) &&
           request.resource.data.updatedBy == request.auth.uid &&
           request.resource.data.updatedAt == request.time &&
-          !isSettled(meetingId);
+          !isSettled(meetingId) &&
+          aggregatesMatchUpdate();
 
         // 일반 삭제는 "내 비용"일 때만(정산 전에만) 허용한다. 모임 전체 삭제에 묶여
         // 지출도 같이 지워지는 경우는 모임 문서 자체가 이 배치 후 사라지므로 예외로 허용한다.
-        allow delete: if isAccountWriteUnlocked() && isMeetingWriteUnlocked(meetingId) &&
+        allow delete: if isAccountWriteUnlocked() &&
           isMember(meetingId) && (
-          !existsAfter(/databases/$(database)/documents/meetings/$(meetingId)) ||
-          (!isSettled(meetingId) && resource.data.paidBy == request.auth.uid)
+            !existsAfter(/databases/$(database)/documents/meetings/$(meetingId)) ||
+          (!isSettled(meetingId) && resource.data.paidBy == request.auth.uid && aggregatesMatchDelete())
         );
       }
 
@@ -224,7 +253,7 @@ service cloud.firestore {
         // 방의 총액·인원·UID 순서가 클라이언트가 계산한 값과 다르면 동시 변경이
         // 있었던 것이므로 배치 전체를 거부하고 다시 계산하게 한다.
         allow create: if snapshotId == 'final' && isAccountWriteUnlocked() &&
-          isMeetingWriteUnlocked(meetingId) && isMember(meetingId) &&
+          isMember(meetingId) &&
           get(/databases/$(database)/documents/meetings/$(meetingId)).data.status == 'active' &&
           getAfter(/databases/$(database)/documents/meetings/$(meetingId)).data.status == 'settled' &&
           request.resource.data.keys().hasOnly([
@@ -256,7 +285,6 @@ service cloud.firestore {
         // 방장만 정산방을 다시 여는 같은 배치에서 스냅샷을 제거할 수 있다.
         // 기존 정산 완료 방은 스냅샷이 없으므로 이 삭제 없이도 다시 열 수 있다.
         allow delete: if snapshotId == 'final' && isAccountWriteUnlocked() &&
-          isMeetingWriteUnlocked(meetingId) &&
           get(/databases/$(database)/documents/meetings/$(meetingId)).data.createdBy == request.auth.uid &&
           getAfter(/databases/$(database)/documents/meetings/$(meetingId)).data.status == 'active';
       }

@@ -8,9 +8,11 @@ import {
   deleteDoc,
   doc,
   getDoc,
+  increment,
   serverTimestamp,
   setDoc,
   updateDoc,
+  writeBatch,
 } from "firebase/firestore";
 import { readFile } from "node:fs/promises";
 import { afterAll, beforeAll, beforeEach, describe, it } from "vitest";
@@ -38,8 +40,8 @@ async function seedDocuments(): Promise<void> {
         createdBy: USER_1,
         memberUids: [USER_1, USER_2],
         memberCount: 2,
-        expenseCount: 2,
-        totalAmount: 3000,
+        expenseCount: 1,
+        totalAmount: 1000,
         status: "active",
         memo: "공유방",
       }),
@@ -137,13 +139,16 @@ describe("Firestore 탈퇴 잠금 규칙", () => {
         nickname: "새 닉네임",
       }),
     );
-    await assertSucceeds(
-      updateDoc(doc(db, "meetings/shared-room/expenses/expense-1"), {
+    const expenseBatch = writeBatch(db);
+    expenseBatch.update(doc(db, "meetings/shared-room/expenses/expense-1"), {
         amount: 1500,
         updatedBy: USER_1,
         updatedAt: serverTimestamp(),
-      }),
-    );
+    });
+    expenseBatch.update(doc(db, "meetings/shared-room"), {
+      totalAmount: increment(500),
+    });
+    await assertSucceeds(expenseBatch.commit());
   });
 
   it("일반 멤버가 createdBy를 바꿔 방장 권한을 가져갈 수 없다", async () => {
@@ -213,30 +218,103 @@ describe("Firestore 탈퇴 잠금 규칙", () => {
     await assertSucceeds(
       updateDoc(doc(otherDb, "meetings/other-room"), { memo: "정상 수정" }),
     );
-    await assertSucceeds(
-      updateDoc(doc(otherDb, "meetings/other-room/expenses/expense-2"), {
+    const expenseBatch = writeBatch(otherDb);
+    expenseBatch.update(doc(otherDb, "meetings/other-room/expenses/expense-2"), {
         amount: 2500,
         updatedBy: USER_2,
         updatedAt: serverTimestamp(),
-      }),
-    );
+    });
+    expenseBatch.update(doc(otherDb, "meetings/other-room"), {
+      totalAmount: increment(500),
+    });
+    await assertSucceeds(expenseBatch.commit());
   });
 
-  it("방 잠금은 그 방의 모든 멤버 쓰기만 차단한다", async () => {
+  it("한 사용자의 계정 잠금 중에도 다른 멤버는 같은 공유방을 수정할 수 있다", async () => {
+    await setAccountLock(USER_1);
+    const otherDb = testEnv.authenticatedContext(USER_2).firestore();
+
+    await assertSucceeds(
+      updateDoc(doc(otherDb, "meetings/shared-room"), { memo: "탈퇴 중에도 수정" }),
+    );
+    const expenseBatch = writeBatch(otherDb);
+    expenseBatch.set(doc(otherDb, "meetings/shared-room/expenses/expense-by-user-2"), {
+      amount: 700,
+      category: "교통",
+      memo: "",
+      paidBy: USER_2,
+      createdBy: USER_2,
+      createdAt: serverTimestamp(),
+      updatedBy: USER_2,
+      updatedAt: serverTimestamp(),
+      schemaVersion: 2,
+    });
+    expenseBatch.update(doc(otherDb, "meetings/shared-room"), {
+      totalAmount: increment(700),
+      expenseCount: increment(1),
+    });
+    await assertSucceeds(expenseBatch.commit());
+  });
+
+  it("이전 버전의 방 잠금 표시가 남아 있어도 다른 멤버의 정상 쓰기는 막지 않는다", async () => {
     await setMeetingLock("shared-room");
     const otherDb = testEnv.authenticatedContext(USER_2).firestore();
 
-    await assertFails(
-      updateDoc(doc(otherDb, "meetings/shared-room"), { memo: "변경 시도" }),
+    await assertSucceeds(
+      updateDoc(doc(otherDb, "meetings/shared-room"), { memo: "정상 변경" }),
+    );
+    await assertSucceeds(
+      updateDoc(doc(otherDb, `meetings/shared-room/members/${USER_2}`), {
+        nickname: "정상 변경",
+      }),
     );
     await assertFails(
-      updateDoc(doc(otherDb, `meetings/shared-room/members/${USER_2}`), {
-        nickname: "변경 시도",
+      updateDoc(doc(otherDb, "meetings/shared-room"), {
+        withdrawalLockRequestId: "fake-request",
       }),
     );
     await assertSucceeds(
       updateDoc(doc(otherDb, "meetings/other-room"), { memo: "정상 수정" }),
     );
+  });
+
+  it("비용 금액만 바꾸고 방 총액을 함께 갱신하지 않으면 거부한다", async () => {
+    const db = testEnv.authenticatedContext(USER_1).firestore();
+
+    await assertFails(
+      updateDoc(doc(db, "meetings/shared-room/expenses/expense-1"), {
+        amount: 1500,
+        updatedBy: USER_1,
+        updatedAt: serverTimestamp(),
+      }),
+    );
+  });
+
+  it("비용 추가는 방 총액과 비용 개수를 같은 배치로 갱신해야 한다", async () => {
+    const db = testEnv.authenticatedContext(USER_2).firestore();
+    const expense = {
+      amount: 500,
+      category: "식비",
+      memo: "",
+      paidBy: USER_2,
+      createdBy: USER_2,
+      createdAt: serverTimestamp(),
+      updatedBy: USER_2,
+      updatedAt: serverTimestamp(),
+      schemaVersion: 2,
+    };
+
+    await assertFails(
+      setDoc(doc(db, "meetings/shared-room/expenses/new-without-aggregate"), expense),
+    );
+
+    const batch = writeBatch(db);
+    batch.set(doc(db, "meetings/shared-room/expenses/new-with-aggregate"), expense);
+    batch.update(doc(db, "meetings/shared-room"), {
+      totalAmount: increment(500),
+      expenseCount: increment(1),
+    });
+    await assertSucceeds(batch.commit());
   });
 
   it("잠금 중에도 일반 데이터 읽기는 유지된다", async () => {

@@ -168,18 +168,60 @@ async function commitWrites(
   accessToken: string,
   writes: FirestoreWrite[],
   errorCode: string,
+  transaction?: string,
 ): Promise<void> {
-  if (writes.length === 0) return
+  if (writes.length === 0 && !transaction) return
   const response = await fetch(
     `${FIRESTORE_API}/projects/${encodeURIComponent(projectId)}/databases/(default)/documents:commit`,
     {
       method: 'POST',
       headers: { ...authorization(accessToken), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ writes }),
+      body: JSON.stringify({ writes, ...(transaction ? { transaction } : {}) }),
       signal: requestSignal(),
     },
   )
   if (!response.ok) throw new FirestoreError(errorCode)
+  await response.body?.cancel()
+}
+
+export async function beginFirestoreTransaction(
+  projectId: string,
+  accessToken: string,
+): Promise<string> {
+  const response = await fetch(
+    `${FIRESTORE_API}/projects/${encodeURIComponent(projectId)}/databases/(default)/documents:beginTransaction`,
+    {
+      method: 'POST',
+      headers: { ...authorization(accessToken), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ options: { readWrite: {} } }),
+      signal: requestSignal(),
+    },
+  )
+  const json = await readJson(response, 'TRANSACTION_BEGIN_FAILED')
+  const transaction = json && typeof json === 'object'
+    ? (json as { transaction?: unknown }).transaction
+    : null
+  if (typeof transaction !== 'string' || transaction.length === 0) {
+    throw new FirestoreError('INVALID_TRANSACTION_RESPONSE')
+  }
+  return transaction
+}
+
+export async function rollbackFirestoreTransaction(
+  projectId: string,
+  accessToken: string,
+  transaction: string,
+): Promise<void> {
+  const response = await fetch(
+    `${FIRESTORE_API}/projects/${encodeURIComponent(projectId)}/databases/(default)/documents:rollback`,
+    {
+      method: 'POST',
+      headers: { ...authorization(accessToken), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transaction }),
+      signal: requestSignal(),
+    },
+  )
+  if (!response.ok) throw new FirestoreError('TRANSACTION_ROLLBACK_FAILED')
   await response.body?.cancel()
 }
 
@@ -338,6 +380,7 @@ async function listDocuments(
   collectionId: string,
   accessToken: string,
   maximumDocuments: number,
+  transaction?: string,
 ): Promise<FirestoreRecord[]> {
   const documents: FirestoreRecord[] = []
   let pageToken: string | undefined
@@ -345,6 +388,7 @@ async function listDocuments(
     const url = new URL(`${documentBase(projectId)}/${parentPath}/${collectionId}`)
     url.searchParams.set('pageSize', String(PAGE_SIZE))
     if (pageToken) url.searchParams.set('pageToken', pageToken)
+    if (transaction) url.searchParams.set('transaction', transaction)
     const response = await fetch(url, {
       headers: authorization(accessToken),
       signal: requestSignal(),
@@ -363,8 +407,11 @@ async function getDocument(
   projectId: string,
   documentPath: string,
   accessToken: string,
+  transaction?: string,
 ): Promise<FirestoreRecord | null> {
-  const response = await fetch(`${documentBase(projectId)}/${documentPath}`, {
+  const url = new URL(`${documentBase(projectId)}/${documentPath}`)
+  if (transaction) url.searchParams.set('transaction', transaction)
+  const response = await fetch(url, {
     headers: authorization(accessToken),
     signal: requestSignal(),
   })
@@ -378,8 +425,9 @@ export async function getFirestoreDocument(
   projectId: string,
   documentPath: string,
   accessToken: string,
+  transaction?: string,
 ): Promise<FirestoreRecord | null> {
-  return getDocument(projectId, documentPath, accessToken)
+  return getDocument(projectId, documentPath, accessToken, transaction)
 }
 
 async function listChildCollectionIds(
@@ -437,23 +485,33 @@ export async function loadMeetingSources(
     loadMeetingSource(projectId, meeting.id, accessToken, meeting))
 }
 
+export async function listMeetingIdsForUser(
+  projectId: string,
+  uid: string,
+  accessToken: string,
+): Promise<string[]> {
+  return (await queryMeetings(projectId, uid, accessToken)).map((meeting) => meeting.id)
+}
+
 export async function loadMeetingSource(
   projectId: string,
   meetingId: string,
   accessToken: string,
   knownMeeting?: FirestoreRecord,
+  transaction?: string,
 ): Promise<MeetingSource> {
   const meeting = knownMeeting ?? await getDocument(
     projectId,
     `meetings/${encodeURIComponent(meetingId)}`,
     accessToken,
+    transaction,
   )
   if (!meeting) throw new FirestoreError('MEETING_NOT_FOUND')
   const parentPath = `meetings/${encodeURIComponent(meeting.id)}`
   const [members, expenses, settlementDocuments, childCollectionIds] = await Promise.all([
-    listDocuments(projectId, parentPath, 'members', accessToken, MAX_MEMBERS_PER_MEETING),
-    listDocuments(projectId, parentPath, 'expenses', accessToken, MAX_EXPENSES_PER_MEETING),
-    listDocuments(projectId, parentPath, 'settlements', accessToken, MAX_SETTLEMENT_DOCUMENTS),
+    listDocuments(projectId, parentPath, 'members', accessToken, MAX_MEMBERS_PER_MEETING, transaction),
+    listDocuments(projectId, parentPath, 'expenses', accessToken, MAX_EXPENSES_PER_MEETING, transaction),
+    listDocuments(projectId, parentPath, 'settlements', accessToken, MAX_SETTLEMENT_DOCUMENTS, transaction),
     listChildCollectionIds(projectId, parentPath, accessToken),
   ])
   const settlement = settlementDocuments.find((document) => document.id === 'final') ?? null
@@ -583,63 +641,39 @@ export async function setWithdrawalLockStatus(
   ], 'ACCOUNT_LOCK_UPDATE_FAILED')
 }
 
-export async function lockMeetings(
-  projectId: string,
-  accessToken: string,
-  requestId: string,
-  meetingIds: string[],
-): Promise<void> {
-  const meetings = await Promise.all(meetingIds.map((meetingId) =>
-    getDocument(projectId, `meetings/${encodeURIComponent(meetingId)}`, accessToken)))
-  const writes: FirestoreWrite[] = []
-  for (let index = 0; index < meetingIds.length; index += 1) {
-    const meetingId = meetingIds[index]
-    const meeting = meetings[index]
-    if (!meetingId || !meeting?.updateTime) throw new FirestoreError('MEETING_NOT_FOUND')
-    const existingLock = meeting.data.withdrawalLockRequestId
-    if (existingLock === requestId) continue
-    if (existingLock !== undefined && existingLock !== null) {
-      throw new FirestoreError('MEETING_ALREADY_LOCKED')
-    }
-    writes.push(updateWrite(
-      projectId,
-      `meetings/${meetingId}`,
-      { withdrawalLockRequestId: requestId },
-      ['withdrawalLockRequestId'],
-      { updateTime: meeting.updateTime },
-    ))
-  }
-  await commitWrites(projectId, accessToken, writes, 'MEETING_LOCK_FAILED')
-}
-
-export async function releaseWithdrawalLocks(
+export async function markWithdrawalProcessing(
   projectId: string,
   accessToken: string,
   uid: string,
   requestId: string,
-  meetingIds: string[],
 ): Promise<void> {
-  const meetings = await Promise.all(meetingIds.map((meetingId) =>
-    getDocument(projectId, `meetings/${encodeURIComponent(meetingId)}`, accessToken)))
+  const now = new Date()
+  await commitWrites(projectId, accessToken, [
+    updateWrite(projectId, `withdrawalRequests/${requestId}`, {
+      status: 'processing',
+      stage: 'processing-meetings',
+      updatedAt: now,
+    }, ['status', 'stage', 'updatedAt'], { exists: true }),
+    updateWrite(projectId, `withdrawalLocks/${uid}`, {
+      requestId,
+      status: 'processing',
+      updatedAt: now,
+    }, ['requestId', 'status', 'updatedAt'], { exists: true }),
+  ], 'WITHDRAWAL_PROCESSING_UPDATE_FAILED')
+}
+
+export async function releaseWithdrawalAccountLock(
+  projectId: string,
+  accessToken: string,
+  uid: string,
+  requestId: string,
+): Promise<void> {
   const accountLock = await getDocument(
     projectId,
     `withdrawalLocks/${encodeURIComponent(uid)}`,
     accessToken,
   )
   const writes: FirestoreWrite[] = []
-  for (let index = 0; index < meetingIds.length; index += 1) {
-    const meetingId = meetingIds[index]
-    const meeting = meetings[index]
-    if (meetingId && meeting?.updateTime && meeting.data.withdrawalLockRequestId === requestId) {
-      writes.push(updateWrite(
-        projectId,
-        `meetings/${meetingId}`,
-        {},
-        ['withdrawalLockRequestId'],
-        { updateTime: meeting.updateTime },
-      ))
-    }
-  }
   if (accountLock?.updateTime && accountLock.data.requestId === requestId) {
     writes.push(deleteWrite(
       projectId,
@@ -665,7 +699,7 @@ export async function markWorkflowCreationFailed(
     'workflow-create-failed',
     { errorCode: 'WORKFLOW_CREATE_FAILED' },
   )
-  await releaseWithdrawalLocks(projectId, accessToken, uid, requestId, [])
+  await releaseWithdrawalAccountLock(projectId, accessToken, uid, requestId)
   await commitWrites(projectId, accessToken, [
     updateWrite(projectId, `withdrawalManifests/${manifestId}`, {
       status: 'previewed',
@@ -683,19 +717,19 @@ export async function processSharedMemberDeparture(
   projectId: string,
   accessToken: string,
   uid: string,
-  requestId: string,
   source: MeetingSource,
   anonymizedSnapshot: Record<string, unknown> | null,
   successorUid: string | null,
+  transaction?: string,
 ): Promise<{ deletedExpenseCount: number }> {
   const meetingId = source.meeting.id
   const memberUids = Array.isArray(source.meeting.data.memberUids)
     ? source.meeting.data.memberUids.filter((value): value is string => typeof value === 'string')
     : []
   const alreadyProcessed = !memberUids.includes(uid)
-  if (alreadyProcessed) return { deletedExpenseCount: 0 }
-  if (source.meeting.data.withdrawalLockRequestId !== requestId) {
-    throw new FirestoreError('MEETING_LOCK_LOST')
+  if (alreadyProcessed) {
+    await commitWrites(projectId, accessToken, [], 'MEETING_DEPARTURE_FAILED', transaction)
+    return { deletedExpenseCount: 0 }
   }
 
   const ownedExpenses = source.expenses.filter((expense) => expenseAuthor(expense) === uid)
@@ -724,7 +758,6 @@ export async function processSharedMemberDeparture(
     'memberCount',
     'expenseCount',
     'totalAmount',
-    'withdrawalLockRequestId',
   ]
   if (isOwner) {
     meetingData.createdBy = successorUid
@@ -765,7 +798,13 @@ export async function processSharedMemberDeparture(
       source.settlement?.updateTime ? { updateTime: source.settlement.updateTime } : { exists: true },
     ))
   }
-  await commitWrites(projectId, accessToken, writes, 'MEETING_DEPARTURE_FAILED')
+  await commitWrites(
+    projectId,
+    accessToken,
+    writes,
+    'MEETING_DEPARTURE_FAILED',
+    transaction,
+  )
   return { deletedExpenseCount: ownedExpenses.length }
 }
 
@@ -773,8 +812,8 @@ export async function deleteSoloMeeting(
   projectId: string,
   accessToken: string,
   uid: string,
-  requestId: string,
   source: MeetingSource,
+  transaction?: string,
 ): Promise<{ deletedExpenseCount: number }> {
   const meetingId = source.meeting.id
   const memberUids = Array.isArray(source.meeting.data.memberUids)
@@ -788,7 +827,6 @@ export async function deleteSoloMeeting(
     source.settlement.data.participantIds[0] === uid
   )
   if (
-    source.meeting.data.withdrawalLockRequestId !== requestId ||
     source.meeting.data.createdBy !== uid ||
     memberUids.length !== 1 || memberUids[0] !== uid ||
     source.members.length !== 1 || source.members[0]?.id !== uid ||
@@ -821,7 +859,13 @@ export async function deleteSoloMeeting(
     ),
   ]
   if (writes.length > MAX_ATOMIC_WRITES) throw new FirestoreError('DOCUMENT_LIMIT_EXCEEDED')
-  await commitWrites(projectId, accessToken, writes, 'SOLO_MEETING_DELETE_FAILED')
+  await commitWrites(
+    projectId,
+    accessToken,
+    writes,
+    'SOLO_MEETING_DELETE_FAILED',
+    transaction,
+  )
   return { deletedExpenseCount: source.expenses.length }
 }
 

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  beginFirestoreTransaction,
   cleanupExpiredWithdrawalMetadata,
   deleteSoloMeeting,
   finalizeWithdrawalMetadata,
@@ -126,7 +127,6 @@ describe('processSharedMemberDeparture', () => {
       'project-1',
       'access-token',
       'user-1',
-      'request-1',
       source,
       null,
       null,
@@ -154,7 +154,7 @@ describe('processSharedMemberDeparture', () => {
       expenseCount: { integerValue: '1' },
       totalAmount: { integerValue: '2000' },
     })
-    expect(meetingWrite?.updateMask?.fieldPaths).toContain('withdrawalLockRequestId')
+    expect(meetingWrite?.updateMask?.fieldPaths).not.toContain('withdrawalLockRequestId')
   })
 
   it('공유방 방장이 탈퇴하면 선택된 현재 멤버에게 방장을 원자적으로 이전한다', async () => {
@@ -177,7 +177,7 @@ describe('processSharedMemberDeparture', () => {
     }
 
     await processSharedMemberDeparture(
-      'project-1', 'access-token', 'user-1', 'request-1', source, null, 'user-2',
+      'project-1', 'access-token', 'user-1', source, null, 'user-2',
     )
 
     const [, init] = fetchMock.mock.calls[0] ?? []
@@ -204,7 +204,7 @@ describe('processSharedMemberDeparture', () => {
       childCollectionIds: ['members'],
     }
 
-    await expect(processSharedMemberDeparture('project-1', 'access-token', 'user-1', 'request-1', source, null, 'outsider')).rejects.toThrow(
+    await expect(processSharedMemberDeparture('project-1', 'access-token', 'user-1', source, null, 'outsider')).rejects.toThrow(
       'INVALID_SUCCESSOR',
     )
     expect(fetchMock).not.toHaveBeenCalled()
@@ -227,7 +227,7 @@ describe('processSharedMemberDeparture', () => {
       childCollectionIds: ['expenses', 'members', 'settlements'],
     }
 
-    await deleteSoloMeeting('project-1', 'access-token', 'user-1', 'request-1', source)
+    await deleteSoloMeeting('project-1', 'access-token', 'user-1', source)
 
     expect(fetchMock).toHaveBeenCalledOnce()
     const [, init] = fetchMock.mock.calls[0] ?? []
@@ -266,12 +266,6 @@ describe('processSharedMemberDeparture', () => {
         source.childCollectionIds.push('unknown-data')
       },
     },
-    {
-      name: '다른 탈퇴 요청의 잠금인 경우',
-      mutate: (source: MeetingSource) => {
-        source.meeting.data.withdrawalLockRequestId = 'other-request'
-      },
-    },
   ])('단독 방 삭제는 $name 안전하게 쓰기 전에 거부한다', async ({ mutate }) => {
     const fetchMock = vi.spyOn(globalThis, 'fetch')
     const source: MeetingSource = {
@@ -295,8 +289,41 @@ describe('processSharedMemberDeparture', () => {
     }
     mutate(source)
 
-    await expect(deleteSoloMeeting('project-1', 'access-token', 'user-1', 'request-1', source)).rejects.toThrow('SOLO_MEETING_NOT_SAFE_TO_DELETE')
+    await expect(deleteSoloMeeting('project-1', 'access-token', 'user-1', source)).rejects.toThrow('SOLO_MEETING_NOT_SAFE_TO_DELETE')
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('Firestore 읽기-쓰기 트랜잭션을 시작하고 원자적 commit에 연결한다', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.endsWith(':beginTransaction')) {
+        return new Response(JSON.stringify({ transaction: 'transaction-1' }), { status: 200 })
+      }
+      return new Response(null, { status: 200 })
+    })
+    const transaction = await beginFirestoreTransaction('project-1', 'access-token')
+    const source: MeetingSource = {
+      meeting: record('meeting-1', {
+        status: 'active',
+        memberUids: ['user-1', 'user-2'],
+        memberCount: 2,
+        expenseCount: 1,
+        totalAmount: 1000,
+      }),
+      members: [record('user-1', {}), record('user-2', {})],
+      expenses: [record('expense-1', { createdBy: 'user-1', paidBy: 'user-1', amount: 1000 })],
+      settlement: null,
+      settlementDocuments: [],
+      childCollectionIds: ['expenses', 'members'],
+    }
+
+    await processSharedMemberDeparture(
+      'project-1', 'access-token', 'user-1', source, null, null, transaction,
+    )
+
+    const commitCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith(':commit'))
+    const body = JSON.parse(String(commitCall?.[1]?.body)) as { transaction?: string }
+    expect(body.transaction).toBe('transaction-1')
   })
 
   it('완료 요청에서는 상태 토큰 외의 개인정보와 처리 원본을 제거한다', async () => {

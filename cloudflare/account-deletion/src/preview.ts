@@ -361,9 +361,9 @@ export function withdrawalSourceHashInput(sources: MeetingSource[]): string {
   const normalized = [...sources]
     .sort((left, right) => left.meeting.id.localeCompare(right.meeting.id))
     .map((source) => ({
-      // Workflow가 방 잠금 필드를 추가하면 meeting의 updateTime도 바뀐다.
-      // 탈퇴 원본 자체만 비교할 수 있도록 잠금 필드와 Firestore 메타 시간은
-      // 해시에서 제외한다. 같은 내용으로 문서를 다시 만든 경우도 처리 결과는 같다.
+      // 이전 버전의 Workflow가 남긴 잠금 필드는 탈퇴 원본 데이터가 아니다.
+      // 같은 내용으로 문서를 다시 만든 경우에도 동일하게 비교할 수 있도록
+      // 잠금 필드와 Firestore 메타 시간은 해시에서 제외한다.
       meeting: {
         id: source.meeting.id,
         data: Object.fromEntries(
