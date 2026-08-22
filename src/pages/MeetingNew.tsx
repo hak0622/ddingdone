@@ -118,8 +118,8 @@ export default function MeetingNew() {
           onClick={handleSubmit}
           style={{
             display: 'block',
-            width: '100%',
-            marginTop: 8,
+            width: 'calc(100% - 40px)',
+            margin: '8px 20px 0',
             height: 56,
             background: name.trim().length === 0 || !isDateValid || submitting ? '#e0e0e0' : '#3182F6',
             color: name.trim().length === 0 || !isDateValid || submitting ? '#aaa' : '#fff',

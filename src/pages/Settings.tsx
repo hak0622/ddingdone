@@ -109,8 +109,8 @@ export default function Settings() {
               onClick={handleSave}
               disabled={!canSave}
               style={{
-                width: '100%',
-                marginTop: 12,
+                width: 'calc(100% - 40px)',
+                margin: '12px 20px 0',
                 padding: '14px 0',
                 fontSize: 15,
                 fontWeight: 700,
