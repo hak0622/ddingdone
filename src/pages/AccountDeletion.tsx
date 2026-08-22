@@ -6,6 +6,7 @@ import {
   confirmWithdrawal,
   createWithdrawalPreview,
   getWithdrawalStatus,
+  remainingPollDelay,
   type WithdrawalMeetingPreview,
   type WithdrawalPreview,
   type WithdrawalStatus,
@@ -213,19 +214,20 @@ export default function AccountDeletion() {
     let timer: number | undefined
 
     async function poll() {
+      const startedAt = performance.now()
       try {
         const next = await getWithdrawalStatus(request.requestId, request.statusToken)
         if (!cancelled) {
           setStatus(next)
           setError('')
           if (!TERMINAL_STATUSES.has(next.status)) {
-            timer = window.setTimeout(poll, 1000)
+            timer = window.setTimeout(poll, remainingPollDelay(startedAt, 1000))
           }
         }
       } catch (pollError) {
         if (!cancelled) {
           setError(errorMessage(pollError))
-          timer = window.setTimeout(poll, 3000)
+          timer = window.setTimeout(poll, remainingPollDelay(startedAt, 3000))
         }
       }
     }

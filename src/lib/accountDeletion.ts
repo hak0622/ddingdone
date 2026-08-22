@@ -62,7 +62,10 @@ export interface WithdrawalStatus {
   stage: string
   errorCode: string | null
   updatedAt: string
-  workflowStatus: string
+}
+
+export function remainingPollDelay(startedAt: number, intervalMs: number, now = performance.now()): number {
+  return Math.max(0, intervalMs - (now - startedAt))
 }
 
 interface ConfirmResult {

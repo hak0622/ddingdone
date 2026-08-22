@@ -1,11 +1,14 @@
 import { AuthenticationError, createGoogleAccessToken, readBearerToken, verifyFirebaseIdToken } from './auth'
 import { randomNonce, sha256Hex, stableStringify } from './crypto'
+import { deleteCloudinaryMeetingImage } from './cloudinary'
 import {
   claimWithdrawalRequest,
   cleanupExpiredWithdrawalMetadata,
   createWithdrawalManifest,
   FirestoreError,
   getFirestoreDocument,
+  deleteCloudinaryDeletionJob,
+  listPendingCloudinaryDeletionJobs,
   loadMeetingSources,
   markWorkflowCreationFailed,
 } from './firestore'
@@ -270,26 +273,64 @@ async function withdrawalStatus(
     }
     if (!authorized) return jsonResponse({ error: { code: 'UNAUTHORIZED' } }, 401, origin)
 
-    let workflowState = 'unknown'
-    try {
-      workflowState = (await (await env.ACCOUNT_DELETION_WORKFLOW.get(requestId)).status()).status
-    } catch {
-      // Firestore 요청 상태가 원본이다. Workflow 보존 기간이 끝난 뒤에도 상태
-      // 조회가 가능해야 하므로 인스턴스 조회 실패는 unknown으로만 표시한다.
-    }
     return jsonResponse({
       requestId,
       status: record.data.status,
       stage: record.data.stage,
       errorCode: record.data.errorCode ?? null,
       updatedAt: record.data.updatedAt,
-      workflowStatus: workflowState,
     }, 200, origin)
   } catch (error) {
     const errorCode = error instanceof AuthenticationError ? 'UNAUTHORIZED' : 'INTERNAL_ERROR'
     logResult(logRequestId, 'error', { stage: 'status', errorCode })
     return jsonResponse({ error: { code: errorCode } }, errorCode === 'UNAUTHORIZED' ? 401 : 500, origin)
   }
+}
+
+async function cleanupPendingCloudinaryImages(env: Env, accessToken: string): Promise<{
+  scannedCount: number
+  deletedCount: number
+  failedCount: number
+}> {
+  const jobs = await listPendingCloudinaryDeletionJobs(
+    env.FIREBASE_PROJECT_ID,
+    accessToken,
+  )
+  let nextIndex = 0
+  let deletedCount = 0
+  let failedCount = 0
+  async function worker(): Promise<void> {
+    while (nextIndex < jobs.length) {
+      const job = jobs[nextIndex]
+      nextIndex += 1
+      if (!job) continue
+      try {
+        await deleteCloudinaryMeetingImage(
+          env.CLOUDINARY_CLOUD_NAME,
+          env.CLOUDINARY_API_KEY,
+          env.CLOUDINARY_API_SECRET,
+          job.meetingId,
+          job.publicId,
+        )
+        await deleteCloudinaryDeletionJob(
+          env.FIREBASE_PROJECT_ID,
+          accessToken,
+          job,
+        )
+        deletedCount += 1
+      } catch (error) {
+        failedCount += 1
+        console.error(JSON.stringify({
+          result: 'error',
+          stage: 'cloudinary-cleanup-job',
+          jobId: job.id,
+          errorCode: error instanceof Error ? error.message : 'INTERNAL_ERROR',
+        }))
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(2, jobs.length) }, worker))
+  return { scannedCount: jobs.length, deletedCount, failedCount }
 }
 
 export default {
@@ -327,12 +368,21 @@ export default {
         env.FIREBASE_CLIENT_EMAIL,
         env.FIREBASE_PRIVATE_KEY,
       )
-      const result = await cleanupExpiredWithdrawalMetadata(
-        env.FIREBASE_PROJECT_ID,
-        accessToken,
-        new Date(controller.scheduledTime),
-      )
-      console.log(JSON.stringify({ cleanupId, result: 'success', stage: 'cleanup', ...result }))
+      const [metadata, cloudinary] = await Promise.all([
+        cleanupExpiredWithdrawalMetadata(
+          env.FIREBASE_PROJECT_ID,
+          accessToken,
+          new Date(controller.scheduledTime),
+        ),
+        cleanupPendingCloudinaryImages(env, accessToken),
+      ])
+      console.log(JSON.stringify({
+        cleanupId,
+        result: 'success',
+        stage: 'cleanup',
+        metadata,
+        cloudinary,
+      }))
     } catch (error) {
       const errorCode = error instanceof FirestoreError ? error.code : 'INTERNAL_ERROR'
       console.error(JSON.stringify({ cleanupId, result: 'error', stage: 'cleanup', errorCode }))

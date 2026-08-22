@@ -3,8 +3,10 @@ import { NonRetryableError } from 'cloudflare:workflows'
 import { anonymizeSettlementSnapshot, SnapshotAnonymizationError } from './anonymization'
 import { createGoogleAccessToken, deleteFirebaseUser } from './auth'
 import { deleteCloudinaryMeetingImage } from './cloudinary'
+import { meetingBatches } from './concurrency'
 import {
   beginFirestoreTransaction,
+  cloudinaryDeletionJobId,
   deleteSoloMeeting,
   finalizeWithdrawalMetadata,
   getFirestoreDocument,
@@ -43,6 +45,7 @@ interface ProcessedMeetingResult {
   action: WithdrawalMeetingPreview['action'] | 'already_processed'
   deletedExpenseCount: number
   photoPublicId: string | null
+  cloudinaryCleanupJobId: string | null
 }
 
 function successorMap(value: unknown): Record<string, string> {
@@ -119,6 +122,155 @@ function logStage(
   }))
 }
 
+async function processMeeting(
+  env: Env,
+  step: WorkflowStep,
+  requestId: string,
+  meeting: WorkflowMeetingPlan,
+): Promise<ProcessedMeetingResult> {
+  const processed = await step.do(`process meeting ${meeting.meetingId}`, RETRY, async () => {
+    const startedAt = Date.now()
+    const accessToken = await createGoogleAccessToken(
+      env.FIREBASE_CLIENT_EMAIL,
+      env.FIREBASE_PRIVATE_KEY,
+    )
+    const context = await loadContext(env, requestId, accessToken)
+    const transaction = await beginFirestoreTransaction(env.FIREBASE_PROJECT_ID, accessToken)
+    let transactionFinished = false
+    try {
+      const meetingDocument = await getFirestoreDocument(
+        env.FIREBASE_PROJECT_ID,
+        `meetings/${meeting.meetingId}`,
+        accessToken,
+        transaction,
+      )
+      if (!meetingDocument) {
+        await rollbackFirestoreTransaction(env.FIREBASE_PROJECT_ID, accessToken, transaction)
+        transactionFinished = true
+        return {
+          action: 'already_processed',
+          deletedExpenseCount: 0,
+          photoPublicId: null,
+          cloudinaryCleanupJobId: null,
+        } satisfies ProcessedMeetingResult
+      }
+      const memberUids = Array.isArray(meetingDocument.data.memberUids)
+        ? meetingDocument.data.memberUids.filter((value): value is string => typeof value === 'string')
+        : []
+      if (!memberUids.includes(context.uid)) {
+        await rollbackFirestoreTransaction(env.FIREBASE_PROJECT_ID, accessToken, transaction)
+        transactionFinished = true
+        return {
+          action: 'already_processed',
+          deletedExpenseCount: 0,
+          photoPublicId: null,
+          cloudinaryCleanupJobId: null,
+        } satisfies ProcessedMeetingResult
+      }
+      const isSolo = memberUids.length === 1
+      const isSettled = meetingDocument.data.status === 'settled'
+      const source = await loadMeetingSource(
+        env.FIREBASE_PROJECT_ID,
+        meeting.meetingId,
+        accessToken,
+        meetingDocument,
+        transaction,
+        {
+          includeSettlementDocuments: isSolo || isSettled,
+          includeChildCollectionIds: isSolo,
+        },
+      )
+      const currentPreview = (await buildWithdrawalPreview(context.uid, [source])).meetings[0]
+      if (!currentPreview || currentPreview.action === 'manual_review') {
+        throw new NonRetryableError('MANUAL_REVIEW_REQUIRED')
+      }
+      const successorUid = currentSuccessor(currentPreview, meeting.requestedSuccessorUid)
+      const photoPublicId = currentPreview.action === 'delete_solo_room' &&
+        typeof source.meeting.data.photoPublicId === 'string'
+        ? source.meeting.data.photoPublicId
+        : null
+      const cleanupJobId = photoPublicId
+        ? cloudinaryDeletionJobId(requestId, meeting.meetingId)
+        : null
+      let result: { deletedExpenseCount: number }
+      if (currentPreview.action === 'delete_solo_room') {
+        result = await deleteSoloMeeting(
+          env.FIREBASE_PROJECT_ID,
+          accessToken,
+          context.uid,
+          source,
+          transaction,
+          photoPublicId ? { requestId, publicId: photoPublicId } : null,
+        )
+      } else {
+        let snapshot: Record<string, unknown> | null = null
+        if (currentPreview.action === 'anonymize_settled_shared') {
+          try {
+            snapshot = await anonymizeSettlementSnapshot(
+              requestId,
+              context.uid,
+              meeting.meetingId,
+              source.settlement,
+            )
+          } catch (error) {
+            if (error instanceof SnapshotAnonymizationError) {
+              throw new NonRetryableError(error.code)
+            }
+            throw error
+          }
+        }
+        result = await processSharedMemberDeparture(
+          env.FIREBASE_PROJECT_ID,
+          accessToken,
+          context.uid,
+          source,
+          snapshot,
+          successorUid,
+          transaction,
+        )
+      }
+      transactionFinished = true
+      logStage(requestId, 'meeting', startedAt, {
+        meetingId: meeting.meetingId,
+        action: currentPreview.action,
+        deletedExpenseCount: result.deletedExpenseCount,
+      })
+      return {
+        action: currentPreview.action,
+        deletedExpenseCount: result.deletedExpenseCount,
+        photoPublicId,
+        cloudinaryCleanupJobId: cleanupJobId,
+      } satisfies ProcessedMeetingResult
+    } catch (error) {
+      if (!transactionFinished) {
+        await rollbackFirestoreTransaction(
+          env.FIREBASE_PROJECT_ID,
+          accessToken,
+          transaction,
+        ).catch(() => undefined)
+      }
+      throw error
+    }
+  })
+
+  if (processed.action === 'delete_solo_room' && processed.photoPublicId) {
+    const photoPublicId = processed.photoPublicId
+    await step.do(`delete meeting photo ${meeting.meetingId}`, RETRY, async () => {
+      const startedAt = Date.now()
+      await deleteCloudinaryMeetingImage(
+        env.CLOUDINARY_CLOUD_NAME,
+        env.CLOUDINARY_API_KEY,
+        env.CLOUDINARY_API_SECRET,
+        meeting.meetingId,
+        photoPublicId,
+      )
+      logStage(requestId, 'cloudinary-photo', startedAt, { meetingId: meeting.meetingId })
+      return { deleted: true }
+    })
+  }
+  return processed
+}
+
 export class AccountDeletionWorkflow extends WorkflowEntrypoint<Env, WithdrawalWorkflowParams> {
   async run(event: WorkflowEvent<WithdrawalWorkflowParams>, step: WorkflowStep): Promise<{
     status: 'complete'
@@ -170,138 +322,17 @@ export class AccountDeletionWorkflow extends WorkflowEntrypoint<Env, WithdrawalW
       const orderedMeetings = [...meetingPlan].sort(
         (left, right) => left.meetingId.localeCompare(right.meetingId),
       )
-      for (const meeting of orderedMeetings) {
-        const processed = await step.do(`process meeting ${meeting.meetingId}`, RETRY, async () => {
-          const startedAt = Date.now()
-          const accessToken = await createGoogleAccessToken(
-            this.env.FIREBASE_CLIENT_EMAIL,
-            this.env.FIREBASE_PRIVATE_KEY,
-          )
-          const context = await loadContext(this.env, requestId, accessToken)
-          const transaction = await beginFirestoreTransaction(
-            this.env.FIREBASE_PROJECT_ID,
-            accessToken,
-          )
-          let transactionFinished = false
-          try {
-            const meetingDocument = await getFirestoreDocument(
-              this.env.FIREBASE_PROJECT_ID,
-              `meetings/${meeting.meetingId}`,
-              accessToken,
-              transaction,
-            )
-            if (!meetingDocument) {
-              await rollbackFirestoreTransaction(this.env.FIREBASE_PROJECT_ID, accessToken, transaction)
-              transactionFinished = true
-              return {
-                action: 'already_processed',
-                deletedExpenseCount: 0,
-                photoPublicId: null,
-              } satisfies ProcessedMeetingResult
-            }
-            const memberUids = Array.isArray(meetingDocument.data.memberUids)
-              ? meetingDocument.data.memberUids
-              : []
-            if (!memberUids.includes(context.uid)) {
-              await rollbackFirestoreTransaction(this.env.FIREBASE_PROJECT_ID, accessToken, transaction)
-              transactionFinished = true
-              return {
-                action: 'already_processed',
-                deletedExpenseCount: 0,
-                photoPublicId: null,
-              } satisfies ProcessedMeetingResult
-            }
-            const source = await loadMeetingSource(
-              this.env.FIREBASE_PROJECT_ID,
-              meeting.meetingId,
-              accessToken,
-              meetingDocument,
-              transaction,
-            )
-            const currentPreview = (await buildWithdrawalPreview(context.uid, [source])).meetings[0]
-            if (!currentPreview || currentPreview.action === 'manual_review') {
-              throw new NonRetryableError('MANUAL_REVIEW_REQUIRED')
-            }
-            const successorUid = currentSuccessor(currentPreview, meeting.requestedSuccessorUid)
-            const photoPublicId = currentPreview.action === 'delete_solo_room' &&
-              typeof source.meeting.data.photoPublicId === 'string'
-              ? source.meeting.data.photoPublicId
-              : null
-            let result: { deletedExpenseCount: number }
-            if (currentPreview.action === 'delete_solo_room') {
-              result = await deleteSoloMeeting(
-                this.env.FIREBASE_PROJECT_ID,
-                accessToken,
-                context.uid,
-                source,
-                transaction,
-              )
-            } else {
-              let snapshot: Record<string, unknown> | null = null
-              if (currentPreview.action === 'anonymize_settled_shared') {
-                try {
-                  snapshot = await anonymizeSettlementSnapshot(
-                    requestId,
-                    context.uid,
-                    meeting.meetingId,
-                    source.settlement,
-                  )
-                } catch (error) {
-                  if (error instanceof SnapshotAnonymizationError) {
-                    throw new NonRetryableError(error.code)
-                  }
-                  throw error
-                }
-              }
-              result = await processSharedMemberDeparture(
-                this.env.FIREBASE_PROJECT_ID,
-                accessToken,
-                context.uid,
-                source,
-                snapshot,
-                successorUid,
-                transaction,
-              )
-            }
-            transactionFinished = true
-            logStage(requestId, 'meeting', startedAt, {
-              meetingId: meeting.meetingId,
-              action: currentPreview.action,
-              deletedExpenseCount: result.deletedExpenseCount,
-            })
-            return {
-              action: currentPreview.action,
-              deletedExpenseCount: result.deletedExpenseCount,
-              photoPublicId,
-            } satisfies ProcessedMeetingResult
-          } catch (error) {
-            if (!transactionFinished) {
-              await rollbackFirestoreTransaction(
-                this.env.FIREBASE_PROJECT_ID,
-                accessToken,
-                transaction,
-              ).catch(() => undefined)
-            }
-            throw error
-          }
-        })
-
-        if (processed.action === 'delete_solo_room' && processed.photoPublicId) {
-          const photoPublicId = processed.photoPublicId
-          await step.do(`delete meeting photo ${meeting.meetingId}`, RETRY, async () => {
-            const startedAt = Date.now()
-            await deleteCloudinaryMeetingImage(
-              this.env.CLOUDINARY_CLOUD_NAME,
-              this.env.CLOUDINARY_API_KEY,
-              this.env.CLOUDINARY_API_SECRET,
-              meeting.meetingId,
-              photoPublicId,
-            )
-            logStage(requestId, 'cloudinary-photo', startedAt, { meetingId: meeting.meetingId })
-            return { deleted: true }
-          })
-        }
+      const processedMeetings: ProcessedMeetingResult[] = []
+      for (const batch of meetingBatches(orderedMeetings)) {
+        const settledResults = await Promise.allSettled(batch.map((meeting) =>
+          processMeeting(this.env, step, requestId, meeting)))
+        const failed = settledResults.find((result) => result.status === 'rejected')
+        if (failed?.status === 'rejected') throw failed.reason
+        processedMeetings.push(...settledResults.flatMap((result) =>
+          result.status === 'fulfilled' ? [result.value] : []))
       }
+      const cloudinaryCleanupJobIds = processedMeetings.flatMap((result) =>
+        result.cloudinaryCleanupJobId ? [result.cloudinaryCleanupJobId] : [])
 
       await step.do('delete auth and finalize withdrawal', RETRY, async () => {
         const startedAt = Date.now()
@@ -349,6 +380,7 @@ export class AccountDeletionWorkflow extends WorkflowEntrypoint<Env, WithdrawalW
           context.uid,
           requestId,
           context.manifestId,
+          cloudinaryCleanupJobIds,
         )
         logStage(requestId, 'finalize-metadata-cleanup', operationStartedAt)
         logStage(requestId, 'auth-and-finalize', startedAt, {

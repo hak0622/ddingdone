@@ -15,6 +15,7 @@ const MAX_CHILD_COLLECTIONS = 100
 const PAGE_SIZE = 300
 const MAX_ATOMIC_WRITES = 500
 const MAX_CLEANUP_DOCUMENTS_PER_COLLECTION = 240
+const MAX_CLOUDINARY_CLEANUP_JOBS = 50
 const FIRESTORE_API = 'https://firestore.googleapis.com/v1'
 const EXTERNAL_REQUEST_TIMEOUT_MS = 10_000
 
@@ -308,6 +309,13 @@ export interface WithdrawalCleanupResult {
   skippedRequestCount: number
 }
 
+export interface CloudinaryDeletionJob {
+  id: string
+  meetingId: string
+  publicId: string
+  updateTime: string
+}
+
 export async function cleanupExpiredWithdrawalMetadata(
   projectId: string,
   accessToken: string,
@@ -344,6 +352,53 @@ export async function cleanupExpiredWithdrawalMetadata(
     skippedManifestCount: manifests.length - safeManifests.length,
     skippedRequestCount: requests.length - safeRequests.length,
   }
+}
+
+export function cloudinaryDeletionJobId(requestId: string, meetingId: string): string {
+  if (!/^[0-9a-f-]{36}$/u.test(requestId) || !/^[A-Za-z0-9_-]{1,128}$/u.test(meetingId)) {
+    throw new FirestoreError('INVALID_CLOUDINARY_CLEANUP_JOB')
+  }
+  return `${requestId}_${meetingId}`
+}
+
+export async function listPendingCloudinaryDeletionJobs(
+  projectId: string,
+  accessToken: string,
+): Promise<CloudinaryDeletionJob[]> {
+  const response = await fetch(`${documentBase(projectId)}:runQuery`, {
+    method: 'POST',
+    headers: { ...authorization(accessToken), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId: 'cloudinaryDeletionJobs' }],
+        limit: MAX_CLOUDINARY_CLEANUP_JOBS,
+      },
+    }),
+    signal: requestSignal(),
+  })
+  const records = asRunQueryDocuments(await readJson(response, 'CLOUDINARY_CLEANUP_QUERY_FAILED'))
+  return records.flatMap((record) => {
+    const meetingId = record.data.meetingId
+    const publicId = record.data.publicId
+    if (
+      !record.updateTime || typeof meetingId !== 'string' || typeof publicId !== 'string' ||
+      record.data.status !== 'pending' || !/^[A-Za-z0-9_-]{1,128}$/u.test(meetingId) ||
+      !publicId.startsWith(`ddingdone/${meetingId}/`)
+    ) return []
+    return [{ id: record.id, meetingId, publicId, updateTime: record.updateTime }]
+  })
+}
+
+export async function deleteCloudinaryDeletionJob(
+  projectId: string,
+  accessToken: string,
+  job: CloudinaryDeletionJob,
+): Promise<void> {
+  await commitWrites(projectId, accessToken, [deleteWrite(
+    projectId,
+    `cloudinaryDeletionJobs/${encodeURIComponent(job.id)}`,
+    { updateTime: job.updateTime },
+  )], 'CLOUDINARY_CLEANUP_JOB_DELETE_FAILED')
 }
 
 async function queryMeetings(
@@ -499,6 +554,10 @@ export async function loadMeetingSource(
   accessToken: string,
   knownMeeting?: FirestoreRecord,
   transaction?: string,
+  options: {
+    includeSettlementDocuments?: boolean
+    includeChildCollectionIds?: boolean
+  } = {},
 ): Promise<MeetingSource> {
   const meeting = knownMeeting ?? await getDocument(
     projectId,
@@ -508,11 +567,17 @@ export async function loadMeetingSource(
   )
   if (!meeting) throw new FirestoreError('MEETING_NOT_FOUND')
   const parentPath = `meetings/${encodeURIComponent(meeting.id)}`
+  const includeSettlementDocuments = options.includeSettlementDocuments ?? true
+  const includeChildCollectionIds = options.includeChildCollectionIds ?? true
   const [members, expenses, settlementDocuments, childCollectionIds] = await Promise.all([
     listDocuments(projectId, parentPath, 'members', accessToken, MAX_MEMBERS_PER_MEETING, transaction),
     listDocuments(projectId, parentPath, 'expenses', accessToken, MAX_EXPENSES_PER_MEETING, transaction),
-    listDocuments(projectId, parentPath, 'settlements', accessToken, MAX_SETTLEMENT_DOCUMENTS, transaction),
-    listChildCollectionIds(projectId, parentPath, accessToken),
+    includeSettlementDocuments
+      ? listDocuments(projectId, parentPath, 'settlements', accessToken, MAX_SETTLEMENT_DOCUMENTS, transaction)
+      : Promise.resolve([]),
+    includeChildCollectionIds
+      ? listChildCollectionIds(projectId, parentPath, accessToken)
+      : Promise.resolve([]),
   ])
   const settlement = settlementDocuments.find((document) => document.id === 'final') ?? null
   return { meeting, members, expenses, settlement, settlementDocuments, childCollectionIds }
@@ -814,6 +879,7 @@ export async function deleteSoloMeeting(
   uid: string,
   source: MeetingSource,
   transaction?: string,
+  cloudinaryCleanup?: { requestId: string; publicId: string } | null,
 ): Promise<{ deletedExpenseCount: number }> {
   const meetingId = source.meeting.id
   const memberUids = Array.isArray(source.meeting.data.memberUids)
@@ -835,8 +901,26 @@ export async function deleteSoloMeeting(
     source.childCollectionIds.some((id) => !['expenses', 'members', 'settlements'].includes(id)) ||
     !safeSettlement
   ) throw new FirestoreError('SOLO_MEETING_NOT_SAFE_TO_DELETE')
+  if (
+    cloudinaryCleanup &&
+    !cloudinaryCleanup.publicId.startsWith(`ddingdone/${meetingId}/`)
+  ) throw new FirestoreError('INVALID_CLOUDINARY_CLEANUP_JOB')
 
   const writes: FirestoreWrite[] = [
+    ...(cloudinaryCleanup ? [updateWrite(
+      projectId,
+      `cloudinaryDeletionJobs/${cloudinaryDeletionJobId(cloudinaryCleanup.requestId, meetingId)}`,
+      {
+        requestId: cloudinaryCleanup.requestId,
+        meetingId,
+        publicId: cloudinaryCleanup.publicId,
+        status: 'pending',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      ['requestId', 'meetingId', 'publicId', 'status', 'createdAt', 'updatedAt'],
+      { exists: false },
+    )] : []),
     ...source.expenses.map((expense) => deleteWrite(
       projectId,
       `meetings/${meetingId}/expenses/${expense.id}`,
@@ -875,6 +959,7 @@ export async function finalizeWithdrawalMetadata(
   uid: string,
   requestId: string,
   manifestId: string,
+  cloudinaryCleanupJobIds: string[] = [],
 ): Promise<void> {
   const now = new Date()
   await commitWrites(projectId, accessToken, [
@@ -891,5 +976,9 @@ export async function finalizeWithdrawalMetadata(
     ], { exists: true }),
     deleteWrite(projectId, `withdrawalManifests/${manifestId}`),
     deleteWrite(projectId, `withdrawalLocks/${uid}`),
+    ...cloudinaryCleanupJobIds.map((jobId) => deleteWrite(
+      projectId,
+      `cloudinaryDeletionJobs/${encodeURIComponent(jobId)}`,
+    )),
   ], 'WITHDRAWAL_FINALIZE_FAILED')
 }

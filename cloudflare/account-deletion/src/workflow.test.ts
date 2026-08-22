@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { sha256Hex, stableStringify } from './crypto'
 import type { FirestoreRecord } from './types'
 import { anonymizeSettlementSnapshot } from './anonymization'
+import { meetingBatches } from './concurrency'
 
 describe('anonymizeSettlementSnapshot', () => {
   it('탈퇴자 UID를 방별 익명 ID로 치환하고 새 해시를 만든다', async () => {
@@ -37,5 +38,19 @@ describe('anonymizeSettlementSnapshot', () => {
       transfers: result.transfers,
     }
     expect(result.hash).toBe(await sha256Hex(stableStringify(core)))
+  })
+})
+
+describe('meetingBatches', () => {
+  it('정렬된 방을 최대 2개씩 결정적인 순서로 묶는다', () => {
+    expect(meetingBatches(['a', 'b', 'c', 'd', 'e'])).toEqual([
+      ['a', 'b'],
+      ['c', 'd'],
+      ['e'],
+    ])
+  })
+
+  it('잘못된 동시 처리 개수는 거부한다', () => {
+    expect(() => meetingBatches(['a'], 0)).toThrow('INVALID_MEETING_CONCURRENCY')
   })
 })

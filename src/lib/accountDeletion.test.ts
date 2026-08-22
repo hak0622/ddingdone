@@ -4,6 +4,7 @@ import {
   confirmWithdrawal,
   createWithdrawalPreview,
   getWithdrawalStatus,
+  remainingPollDelay,
   type WithdrawalPreview,
 } from './accountDeletion'
 
@@ -89,5 +90,12 @@ describe('account deletion API', () => {
     await expect(createWithdrawalPreview()).rejects.toEqual(
       new AccountDeletionError('MANUAL_REVIEW_REQUIRED', 409),
     )
+  })
+})
+
+describe('remainingPollDelay', () => {
+  it('요청 시간까지 포함해 전체 조회 간격을 일정하게 맞춘다', () => {
+    expect(remainingPollDelay(1_000, 1_000, 1_400)).toBe(600)
+    expect(remainingPollDelay(1_000, 1_000, 2_200)).toBe(0)
   })
 })

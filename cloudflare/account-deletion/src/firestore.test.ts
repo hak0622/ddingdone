@@ -4,6 +4,8 @@ import {
   cleanupExpiredWithdrawalMetadata,
   deleteSoloMeeting,
   finalizeWithdrawalMetadata,
+  listPendingCloudinaryDeletionJobs,
+  loadMeetingSource,
   processSharedMemberDeparture,
 } from './firestore'
 import type { FirestoreRecord, MeetingSource } from './types'
@@ -92,6 +94,117 @@ describe('cleanupExpiredWithdrawalMetadata', () => {
       'projects/project-1/databases/(default)/documents/withdrawalRequests/safe-request',
     ])
     expect(deletedPaths.some((path) => path.includes('withdrawalLocks'))).toBe(false)
+  })
+})
+
+describe('optimized meeting reads', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('활성 공유방은 정산 문서와 하위 컬렉션 목록을 읽지 않는다', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      Response.json({ documents: [] }))
+    const meeting = record('shared', {
+      status: 'active',
+      memberUids: ['user-1', 'user-2'],
+    })
+
+    await loadMeetingSource(
+      'project-1',
+      'shared',
+      'access-token',
+      meeting,
+      'transaction-1',
+      { includeSettlementDocuments: false, includeChildCollectionIds: false },
+    )
+
+    const urls = fetchMock.mock.calls.map(([input]) => String(input))
+    expect(urls).toHaveLength(2)
+    expect(urls.some((url) => url.includes('/members'))).toBe(true)
+    expect(urls.some((url) => url.includes('/expenses'))).toBe(true)
+    expect(urls.some((url) => url.includes('/settlements'))).toBe(false)
+    expect(urls.some((url) => url.includes(':listCollectionIds'))).toBe(false)
+  })
+
+  it('정산 완료 공유방은 최종 정산 문서까지 읽되 컬렉션 목록은 생략한다', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      Response.json({ documents: [] }))
+
+    await loadMeetingSource(
+      'project-1',
+      'settled-shared',
+      'access-token',
+      record('settled-shared', {
+        status: 'settled',
+        memberUids: ['user-1', 'user-2'],
+      }),
+      'transaction-1',
+      { includeSettlementDocuments: true, includeChildCollectionIds: false },
+    )
+
+    const urls = fetchMock.mock.calls.map(([input]) => String(input))
+    expect(urls).toHaveLength(3)
+    expect(urls.some((url) => url.includes('/settlements'))).toBe(true)
+    expect(urls.some((url) => url.includes(':listCollectionIds'))).toBe(false)
+  })
+
+  it('단독 방은 정산 문서와 전체 하위 컬렉션 목록을 모두 검사한다', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) =>
+      String(input).includes(':listCollectionIds')
+        ? Response.json({ collectionIds: ['members', 'expenses'] })
+        : Response.json({ documents: [] }))
+
+    await loadMeetingSource(
+      'project-1',
+      'solo',
+      'access-token',
+      record('solo', { status: 'active', memberUids: ['user-1'] }),
+      'transaction-1',
+    )
+
+    const urls = fetchMock.mock.calls.map(([input]) => String(input))
+    expect(urls).toHaveLength(4)
+    expect(urls.some((url) => url.includes('/settlements'))).toBe(true)
+    expect(urls.some((url) => url.includes(':listCollectionIds'))).toBe(true)
+  })
+})
+
+describe('Cloudinary cleanup jobs', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('유효한 pending 대기표만 예약 정리 대상으로 반환한다', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json([
+      {
+        document: {
+          name: 'projects/project-1/databases/(default)/documents/cloudinaryDeletionJobs/job-1',
+          updateTime: '2026-08-22T00:00:00.000Z',
+          fields: {
+            status: { stringValue: 'pending' },
+            meetingId: { stringValue: 'meeting-1' },
+            publicId: { stringValue: 'ddingdone/meeting-1/photo' },
+          },
+        },
+      },
+      {
+        document: {
+          name: 'projects/project-1/databases/(default)/documents/cloudinaryDeletionJobs/job-2',
+          updateTime: '2026-08-22T00:00:00.000Z',
+          fields: {
+            status: { stringValue: 'pending' },
+            meetingId: { stringValue: 'meeting-1' },
+            publicId: { stringValue: 'ddingdone/other-room/photo' },
+          },
+        },
+      },
+    ]))
+
+    await expect(listPendingCloudinaryDeletionJobs('project-1', 'access-token')).resolves.toEqual([
+      {
+        id: 'job-1',
+        meetingId: 'meeting-1',
+        publicId: 'ddingdone/meeting-1/photo',
+        updateTime: '2026-08-22T00:00:00.000Z',
+      },
+    ])
   })
 })
 
@@ -240,6 +353,81 @@ describe('processSharedMemberDeparture', () => {
     ])
   })
 
+  it('사진이 있는 단독 방은 삭제와 같은 commit에 정리 대기표를 남긴다', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 200 }))
+    const source: MeetingSource = {
+      meeting: record('solo', {
+        status: 'active',
+        createdBy: 'user-1',
+        memberUids: ['user-1'],
+        photoPublicId: 'ddingdone/solo/photo',
+      }),
+      members: [record('user-1', {})],
+      expenses: [],
+      settlement: null,
+      settlementDocuments: [],
+      childCollectionIds: ['members'],
+    }
+    const requestId = '123e4567-e89b-12d3-a456-426614174000'
+
+    await deleteSoloMeeting(
+      'project-1',
+      'access-token',
+      'user-1',
+      source,
+      undefined,
+      { requestId, publicId: 'ddingdone/solo/photo' },
+    )
+
+    const [, init] = fetchMock.mock.calls[0] ?? []
+    const body = JSON.parse(String(init?.body)) as {
+      writes: Array<{
+        update?: { name?: string; fields?: Record<string, { stringValue?: string }> }
+        currentDocument?: { exists?: boolean }
+      }>
+    }
+    expect(body.writes[0]).toMatchObject({
+      update: {
+        name: `projects/project-1/databases/(default)/documents/cloudinaryDeletionJobs/${requestId}_solo`,
+        fields: {
+          status: { stringValue: 'pending' },
+          meetingId: { stringValue: 'solo' },
+          publicId: { stringValue: 'ddingdone/solo/photo' },
+        },
+      },
+      currentDocument: { exists: false },
+    })
+  })
+
+  it('다른 방 사진 경로로는 정리 대기표를 만들지 않는다', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    const source: MeetingSource = {
+      meeting: record('solo', {
+        status: 'active',
+        createdBy: 'user-1',
+        memberUids: ['user-1'],
+      }),
+      members: [record('user-1', {})],
+      expenses: [],
+      settlement: null,
+      settlementDocuments: [],
+      childCollectionIds: ['members'],
+    }
+
+    await expect(deleteSoloMeeting(
+      'project-1',
+      'access-token',
+      'user-1',
+      source,
+      undefined,
+      {
+        requestId: '123e4567-e89b-12d3-a456-426614174000',
+        publicId: 'ddingdone/other-room/photo',
+      },
+    )).rejects.toThrow('INVALID_CLOUDINARY_CLEANUP_JOB')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it.each([
     {
       name: '다른 멤버가 남아 있는 경우',
@@ -330,7 +518,12 @@ describe('processSharedMemberDeparture', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 200 }))
 
     await finalizeWithdrawalMetadata(
-      'project-1', 'access-token', 'user-1', 'request-1', 'manifest-1',
+      'project-1',
+      'access-token',
+      'user-1',
+      'request-1',
+      'manifest-1',
+      ['cleanup-job-1'],
     )
 
     const [, init] = fetchMock.mock.calls[0] ?? []
@@ -347,5 +540,12 @@ describe('processSharedMemberDeparture', () => {
       'successorByMeeting',
     ]))
     expect(fieldPaths).not.toContain('statusTokenHash')
+    const deletedPaths = body.writes.flatMap((write) => {
+      const path = (write as { delete?: string }).delete
+      return path ? [path] : []
+    })
+    expect(deletedPaths).toContain(
+      'projects/project-1/databases/(default)/documents/cloudinaryDeletionJobs/cleanup-job-1',
+    )
   })
 })

@@ -334,6 +334,7 @@ describe("Firestore 탈퇴 잠금 규칙", () => {
       await Promise.all([
         setDoc(doc(adminDb, "withdrawalManifests/manifest-1"), { uid: USER_1 }),
         setDoc(doc(adminDb, "withdrawalRequests/request-1"), { uid: USER_1 }),
+        setDoc(doc(adminDb, "cloudinaryDeletionJobs/job-1"), { publicId: "secret" }),
       ]);
     });
     const db = testEnv.authenticatedContext(USER_1).firestore();
@@ -341,6 +342,7 @@ describe("Firestore 탈퇴 잠금 규칙", () => {
     await assertFails(getDoc(doc(db, "withdrawalManifests/manifest-1")));
     await assertFails(getDoc(doc(db, "withdrawalRequests/request-1")));
     await assertFails(getDoc(doc(db, `withdrawalLocks/${USER_1}`)));
+    await assertFails(getDoc(doc(db, "cloudinaryDeletionJobs/job-1")));
     await assertFails(
       setDoc(doc(db, `withdrawalLocks/${USER_1}`), { requestId: "fake" }),
     );

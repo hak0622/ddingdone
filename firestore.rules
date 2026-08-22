@@ -40,6 +40,12 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // 단독 방 삭제와 동시에 남기는 사진 정리 대기표다. Worker 서비스 계정만
+    // 접근하며 앱 클라이언트는 조회하거나 위조할 수 없다.
+    match /cloudinaryDeletionJobs/{jobId} {
+      allow read, write: if false;
+    }
+
     match /meetings/{meetingId} {
       function isValidPhotoUpdate() {
         let changed = request.resource.data.diff(resource.data).affectedKeys();
