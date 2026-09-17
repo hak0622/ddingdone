@@ -114,10 +114,9 @@ npm run build  # 컴파일 에러 없이 성공
 
 ## 검증 절차
 
-1. AC 커맨드를 실행해 확인한다.
-2. `phases/3-quality/index.json` step3 status 업데이트:
-   - 성공 → `"completed"`, summary: `"ErrorBoundary 컴포넌트 생성, App.tsx 루트에 적용"`
-   - 실패 → `"error"` + `"error_message"` 기록
+1. 최종 AC 커맨드는 Harness가 `index.json`의 `verify` 설정으로 실행한다.
+2. 구현을 마치면 `ready_for_verification`과 산출물 summary를 반환한다.
+3. Phase/Step 상태와 verify를 수정하거나 Git commit을 실행하지 마라. 최종 판정과 커밋은 Harness가 수행한다.
 
 ## 금지사항
 

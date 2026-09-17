@@ -220,13 +220,12 @@ npm run lint    # ESLint 통과
 
 ## 검증 절차
 
-1. AC 커맨드 실행 및 확인.
+1. 최종 AC 커맨드는 Harness가 `index.json`의 `verify` 설정으로 실행한다.
 2. TypeScript 컴파일 에러 없는지 확인.
 3. useMeeting.ts, useMeetings.ts 파일 생성 확인.
 4. MeetingNew, Home, MeetingDetail, ExpenseInput이 수정됐는지 확인.
-5. phases/2-logic/index.json step1 status 업데이트:
-   - 성공 → "completed", summary: "useMeeting/useMeetings 훅 생성, MeetingNew/Home/MeetingDetail/ExpenseInput Firebase 연동 완료"
-   - 실패 → "error"
+5. 구현을 마치면 `ready_for_verification`과 산출물 summary를 반환한다.
+6. Phase/Step 상태와 verify를 수정하거나 Git commit을 실행하지 마라. 최종 판정과 커밋은 Harness가 수행한다.
 
 ## 금지사항
 - eval(), Function() 사용 금지.

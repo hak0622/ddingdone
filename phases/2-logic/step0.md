@@ -69,10 +69,9 @@ npm run build                             # 컴파일 에러 없이 성공
 
 ## 검증 절차
 
-1. AC 커맨드 실행 및 확인.
-2. phases/2-logic/index.json step0 status 업데이트:
-   - 성공 → "completed", summary: "settle.ts Splitwise 알고리즘 + 단위테스트 구현 완료"
-   - 실패 → "error"
+1. 최종 AC 커맨드는 Harness가 `index.json`의 `verify` 설정으로 실행한다.
+2. 구현을 마치면 `ready_for_verification`과 산출물 summary를 반환한다.
+3. Phase/Step 상태와 verify를 수정하거나 Git commit을 실행하지 마라. 최종 판정과 커밋은 Harness가 수행한다.
 
 ## 금지사항
 - eval(), Function() 사용 금지.

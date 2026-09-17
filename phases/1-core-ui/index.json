@@ -1,11 +1,22 @@
 {
   "project": "ddingdone",
   "phase": "1-core-ui",
+  "project_root": "..",
   "steps": [
     {
       "step": 0,
       "name": "onboarding-home",
       "status": "completed",
+      "verify": [
+        {
+          "name": "build",
+          "command": ["npm", "run", "build"]
+        },
+        {
+          "name": "lint",
+          "command": ["npm", "run", "lint"]
+        }
+      ],
       "started_at": "2026-06-12T17:33:46+0900",
       "summary": "Onboarding(TextField+FixedBottomCTA), Home(빈상태/목록 분기) UI 구현 완료",
       "completed_at": "2026-06-12T17:36:36+0900"
@@ -14,6 +25,16 @@
       "step": 1,
       "name": "meeting-flow",
       "status": "completed",
+      "verify": [
+        {
+          "name": "build",
+          "command": ["npm", "run", "build"]
+        },
+        {
+          "name": "lint",
+          "command": ["npm", "run", "lint"]
+        }
+      ],
       "started_at": "2026-06-12T17:36:37+0900",
       "summary": "MeetingNew(폼 4개), MeetingDetail(사진/참여자/비용/버튼 레이아웃) UI 구현 완료",
       "completed_at": "2026-06-12T17:41:05+0900"
@@ -22,6 +43,16 @@
       "step": 2,
       "name": "expense-settle-ui",
       "status": "completed",
+      "verify": [
+        {
+          "name": "build",
+          "command": ["npm", "run", "build"]
+        },
+        {
+          "name": "lint",
+          "command": ["npm", "run", "lint"]
+        }
+      ],
       "started_at": "2026-06-12T17:41:05+0900",
       "summary": "ExpenseInput(금액/메모/paidBy 선택), Settle(보낼돈/받을돈/공유 레이아웃) UI 구현 완료",
       "completed_at": "2026-06-12T17:44:26+0900"

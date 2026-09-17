@@ -128,13 +128,12 @@ npm run lint    # ESLint 통과
 
 ## 검증 절차
 
-1. AC 커맨드를 실행한다.
+1. 최종 AC 커맨드는 Harness가 `index.json`의 `verify` 설정으로 실행한다.
 2. TypeScript 컴파일 에러가 없는지 확인한다.
 3. ExpenseInput: 금액/메모 TextField, 참여자 선택 UI, FixedBottomCTA 확인.
 4. Settle: 사진 영역, 요약 수치, 보낼 돈/받을 돈 섹션, "토스로 보내기" 버튼, FixedBottomCTA 확인.
-5. phases/1-core-ui/index.json의 step2 status를 업데이트한다:
-   - 성공 → "completed", summary: "ExpenseInput(금액/메모/paidBy 선택), Settle(보낼돈/받을돈/공유 레이아웃) UI 구현 완료"
-   - 실패 → "error", error_message에 에러 내용 기록
+5. 구현을 마치면 `ready_for_verification`과 산출물 summary를 반환한다.
+6. Phase/Step 상태와 verify를 수정하거나 Git commit을 실행하지 마라. 최종 판정과 커밋은 Harness가 수행한다.
 
 ## 금지사항
 - Top 컴포넌트를 빠뜨리지 마라.

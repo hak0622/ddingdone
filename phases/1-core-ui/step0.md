@@ -97,13 +97,12 @@ npm run lint    # ESLint 통과
 
 ## 검증 절차
 
-1. AC 커맨드를 실행한다.
+1. 최종 AC 커맨드는 Harness가 `index.json`의 `verify` 설정으로 실행한다.
 2. TypeScript 컴파일 에러가 없는지 확인한다.
 3. Onboarding: TextField + FixedBottomCTA 렌더링, 닉네임 입력 시 버튼 활성화 로직이 있는지 확인한다.
 4. Home: 빈 상태 / 목록 상태 분기 로직이 있는지 확인한다.
-5. phases/1-core-ui/index.json의 step0 status를 업데이트한다:
-   - 성공 → "completed", summary: "Onboarding(TextField+FixedBottomCTA), Home(빈상태/목록 분기) UI 구현 완료"
-   - 실패 → "error", error_message에 에러 내용 기록
+5. 구현을 마치면 `ready_for_verification`과 산출물 summary를 반환한다.
+6. Phase/Step 상태와 verify를 수정하거나 Git commit을 실행하지 마라. 최종 판정과 커밋은 Harness가 수행한다.
 
 ## 금지사항
 - Top 컴포넌트를 빠뜨리지 마라. 모든 페이지에 필수 (심사 요구사항).

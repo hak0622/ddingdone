@@ -1,11 +1,22 @@
 {
   "project": "ddingdone",
   "phase": "2-logic",
+  "project_root": "..",
   "steps": [
     {
       "step": 0,
       "name": "settle-algorithm",
       "status": "completed",
+      "verify": [
+        {
+          "name": "settle-test",
+          "command": ["npx", "vitest", "run", "src/utils/settle.test.ts"]
+        },
+        {
+          "name": "build",
+          "command": ["npm", "run", "build"]
+        }
+      ],
       "started_at": "2026-06-12T18:06:59+0900",
       "summary": "settle.ts Splitwise 알고리즘 + 단위테스트 구현 완료",
       "completed_at": "2026-06-12T18:09:06+0900"
@@ -14,6 +25,16 @@
       "step": 1,
       "name": "firebase-hooks",
       "status": "completed",
+      "verify": [
+        {
+          "name": "build",
+          "command": ["npm", "run", "build"]
+        },
+        {
+          "name": "lint",
+          "command": ["npm", "run", "lint"]
+        }
+      ],
       "started_at": "2026-06-12T18:09:06+0900",
       "summary": "useMeeting/useMeetings 훅 생성, MeetingNew/Home/MeetingDetail/ExpenseInput Firebase 연동 완료",
       "completed_at": "2026-06-12T18:11:48+0900"
@@ -22,6 +43,16 @@
       "step": 2,
       "name": "photo-upload",
       "status": "completed",
+      "verify": [
+        {
+          "name": "build",
+          "command": ["npm", "run", "build"]
+        },
+        {
+          "name": "lint",
+          "command": ["npm", "run", "lint"]
+        }
+      ],
       "started_at": "2026-06-12T18:11:48+0900",
       "summary": "cloudinary.ts 업로드 함수 + MeetingDetail 사진 추가 기능 연동 완료",
       "completed_at": "2026-06-12T18:13:25+0900"
@@ -30,6 +61,16 @@
       "step": 3,
       "name": "invite-deeplink",
       "status": "completed",
+      "verify": [
+        {
+          "name": "build",
+          "command": ["npm", "run", "build"]
+        },
+        {
+          "name": "lint",
+          "command": ["npm", "run", "lint"]
+        }
+      ],
       "started_at": "2026-06-12T18:13:25+0900",
       "summary": "초대 링크 공유(bridge.shareInviteLink) + 참여자 등록 흐름 구현 완료",
       "completed_at": "2026-06-12T18:16:56+0900"
@@ -38,6 +79,16 @@
       "step": 4,
       "name": "settle-deeplink",
       "status": "completed",
+      "verify": [
+        {
+          "name": "build",
+          "command": ["npm", "run", "build"]
+        },
+        {
+          "name": "lint",
+          "command": ["npm", "run", "lint"]
+        }
+      ],
       "started_at": "2026-06-12T18:16:56+0900",
       "summary": "Settle.tsx 실제 데이터 연동, supertoss:// 딥링크, shareText 공유 완료",
       "completed_at": "2026-06-12T18:18:35+0900"

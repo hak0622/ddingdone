@@ -1,11 +1,22 @@
 {
   "project": "ddingdone",
   "phase": "3-quality",
+  "project_root": "..",
   "steps": [
     {
       "step": 0,
       "name": "vitest-setup",
       "status": "completed",
+      "verify": [
+        {
+          "name": "test",
+          "command": ["npm", "run", "test"]
+        },
+        {
+          "name": "build",
+          "command": ["npm", "run", "build"]
+        }
+      ],
       "started_at": "2026-06-15T18:21:58+0900",
       "summary": "vitest 설정 완료, format.test.ts 3개 + settle.test.ts 5개 통과",
       "completed_at": "2026-06-15T18:24:03+0900"
@@ -14,6 +25,16 @@
       "step": 1,
       "name": "delete-active-meeting",
       "status": "completed",
+      "verify": [
+        {
+          "name": "test",
+          "command": ["npm", "run", "test"]
+        },
+        {
+          "name": "build",
+          "command": ["npm", "run", "build"]
+        }
+      ],
       "started_at": "2026-06-15T18:24:03+0900",
       "summary": "진행중 방 생성자에게 관리 버튼 노출, 삭제 기능 활성화",
       "completed_at": "2026-06-15T18:25:45+0900"
@@ -22,6 +43,16 @@
       "step": 2,
       "name": "style-tokens",
       "status": "completed",
+      "verify": [
+        {
+          "name": "test",
+          "command": ["npm", "run", "test"]
+        },
+        {
+          "name": "build",
+          "command": ["npm", "run", "build"]
+        }
+      ],
       "started_at": "2026-06-15T18:25:45+0900",
       "summary": "src/styles/tokens.ts 생성, History/Settings 인라인 색상 → COLORS 토큰 교체",
       "completed_at": "2026-06-15T18:28:05+0900"
@@ -30,6 +61,16 @@
       "step": 3,
       "name": "error-boundary",
       "status": "completed",
+      "verify": [
+        {
+          "name": "test",
+          "command": ["npm", "run", "test"]
+        },
+        {
+          "name": "build",
+          "command": ["npm", "run", "build"]
+        }
+      ],
       "started_at": "2026-06-15T18:28:05+0900",
       "summary": "ErrorBoundary 컴포넌트 생성, App.tsx 루트에 적용",
       "completed_at": "2026-06-15T18:29:19+0900"

@@ -1,11 +1,18 @@
 {
   "project": "ddingdone",
   "phase": "0-bootstrap",
+  "project_root": "..",
   "steps": [
     {
       "step": 0,
       "name": "firebase-setup",
       "status": "completed",
+      "verify": [
+        {
+          "name": "build",
+          "command": ["npm", "run", "build"]
+        }
+      ],
       "started_at": "2026-06-12T17:28:08+0900",
       "summary": "firebase.ts(Firestore), bridge.ts, cloudinary.ts, vite-env.d.ts 생성/확인 완료",
       "completed_at": "2026-06-12T17:29:14+0900"
@@ -14,6 +21,12 @@
       "step": 1,
       "name": "router-layout",
       "status": "completed",
+      "verify": [
+        {
+          "name": "build",
+          "command": ["npm", "run", "build"]
+        }
+      ],
       "started_at": "2026-06-12T17:29:14+0900",
       "summary": "라우팅 7개, 페이지 컴포넌트 6개, userStore, AppInit 생성/확인 완료",
       "completed_at": "2026-06-12T17:31:28+0900"

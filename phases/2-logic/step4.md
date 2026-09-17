@@ -112,13 +112,12 @@ npm run lint    # ESLint 통과
 
 ## 검증 절차
 
-1. AC 커맨드 실행.
+1. 최종 AC 커맨드는 Harness가 `index.json`의 `verify` 설정으로 실행한다.
 2. Settle.tsx에서 mock 데이터가 제거되고 useMeeting + calculateSettlements 사용하는지 확인.
 3. "토스로 보내기" 클릭 시 window.location.href = supertoss://... 연결되는지 확인.
 4. "정산 결과 공유하기" 클릭 시 shareText 호출하는지 확인.
-5. phases/2-logic/index.json step4 status 업데이트:
-   - 성공 → "completed", summary: "Settle.tsx 실제 데이터 연동, supertoss:// 딥링크, shareText 공유 완료"
-   - 실패 → "error"
+5. 구현을 마치면 `ready_for_verification`과 산출물 summary를 반환한다.
+6. Phase/Step 상태와 verify를 수정하거나 Git commit을 실행하지 마라. 최종 판정과 커밋은 Harness가 수행한다.
 
 ## 금지사항
 - eval(), Function() 사용 금지.

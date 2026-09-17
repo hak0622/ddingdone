@@ -84,12 +84,11 @@ npm run lint    # ESLint 통과
 
 ## 검증 절차
 
-1. AC 커맨드 실행.
+1. 최종 AC 커맨드는 Harness가 `index.json`의 `verify` 설정으로 실행한다.
 2. MeetingDetail에서 "초대 링크 공유" 버튼이 shareInviteLink 호출하는지 확인.
 3. uid가 members에 없는 경우 참여 UI가 렌더링되는지 확인 (isNotMember 조건).
-4. phases/2-logic/index.json step3 status 업데이트:
-   - 성공 → "completed", summary: "초대 링크 공유(bridge.shareInviteLink) + 참여자 등록 흐름 구현 완료"
-   - 실패 → "error"
+4. 구현을 마치면 `ready_for_verification`과 산출물 summary를 반환한다.
+5. Phase/Step 상태와 verify를 수정하거나 Git commit을 실행하지 마라. 최종 판정과 커밋은 Harness가 수행한다.
 
 ## 금지사항
 - eval(), Function() 사용 금지.

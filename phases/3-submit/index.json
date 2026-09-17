@@ -1,8 +1,37 @@
 {
   "project": "ddingdone",
   "phase": "3-submit",
+  "project_root": "..",
   "steps": [
-    { "step": 0, "name": "build-validate", "status": "pending" },
-    { "step": 1, "name": "review-checklist", "status": "pending" }
+    {
+      "step": 0,
+      "name": "build-validate",
+      "status": "pending",
+      "verify": [
+        {
+          "name": "build",
+          "command": ["npm", "run", "build"]
+        }
+      ]
+    },
+    {
+      "step": 1,
+      "name": "review-checklist",
+      "status": "pending",
+      "verify": [
+        {
+          "name": "test",
+          "command": ["npm", "run", "test"]
+        },
+        {
+          "name": "lint",
+          "command": ["npm", "run", "lint"]
+        },
+        {
+          "name": "build",
+          "command": ["npm", "run", "build"]
+        }
+      ]
+    }
   ]
 }

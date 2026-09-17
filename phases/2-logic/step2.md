@@ -132,13 +132,12 @@ npm run lint    # ESLint 통과
 
 ## 검증 절차
 
-1. AC 커맨드 실행.
+1. 최종 AC 커맨드는 Harness가 `index.json`의 `verify` 설정으로 실행한다.
 2. cloudinary.ts 파일 존재 확인.
 3. MeetingDetail에 hidden file input + handleFileChange 로직 있는지 확인.
 4. Cloudinary 환경변수가 .env.local에 없으면 빌드는 되지만 런타임에 에러 메시지 출력됨 — 이는 정상.
-5. phases/2-logic/index.json step2 status 업데이트:
-   - 성공 → "completed", summary: "cloudinary.ts 업로드 함수 + MeetingDetail 사진 추가 기능 연동 완료"
-   - 실패 → "error"
+5. 구현을 마치면 `ready_for_verification`과 산출물 summary를 반환한다.
+6. Phase/Step 상태와 verify를 수정하거나 Git commit을 실행하지 마라. 최종 판정과 커밋은 Harness가 수행한다.
 
 ## 금지사항
 - eval(), Function() 사용 금지.
