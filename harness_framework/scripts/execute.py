@@ -108,8 +108,10 @@ class StepExecutor:
 
     def run(self):
         self._print_header()
-        self._check_blockers()
+        self._ensure_clean_worktree()
         self._checkout_branch()
+        self._ensure_clean_worktree()
+        self._check_blockers()
         guardrails = self._load_guardrails()
         self._ensure_created_at()
         self._execute_all_steps(guardrails)
@@ -140,6 +142,21 @@ class StepExecutor:
         result = self._run_git("rev-parse", "HEAD")
         return result.stdout.strip() if result.returncode == 0 else None
 
+    def _ensure_clean_worktree(self):
+        result = self._run_git("status", "--porcelain")
+        if result.returncode != 0:
+            print("  ERROR: 프로젝트 Git 상태를 확인할 수 없습니다.")
+            if result.stderr:
+                print(f"  {result.stderr.strip()}")
+            sys.exit(1)
+
+        if result.stdout.strip():
+            print("  ERROR: 프로젝트 저장소에 기존 변경 사항이 있습니다.")
+            print("  사용자 작업과 Agent 작업이 섞이지 않도록 변경 사항을 먼저 정리하세요.")
+            for line in result.stdout.rstrip().splitlines():
+                print(f"    {line}")
+            sys.exit(1)
+
     def _checkout_branch(self):
         branch = f"feat-{self._phase_name}"
 
@@ -164,9 +181,24 @@ class StepExecutor:
         print(f"  Branch: {branch}")
 
     def _commit_step(self, step_num: int, step_name: str):
-        self._run_git("add", "-A")
+        add_result = self._run_git("add", "-A")
+        if add_result.returncode != 0:
+            print(f"  ERROR: Step 변경 사항 stage 실패: {add_result.stderr.strip()}")
+            return False
+
+        # 실행 로그는 프로젝트 .gitignore에 포함되어 있어도 현재 Step의
+        # 코드·상태와 같은 단일 커밋에 반드시 포함한다.
+        output_path = self._phase_dir / f"step{step_num}-output.json"
+        if output_path.exists():
+            relative_output = output_path.relative_to(self._project_root)
+            log_result = self._run_git("add", "-f", "--", str(relative_output))
+            if log_result.returncode != 0:
+                print(f"  ERROR: Step 실행 로그 stage 실패: {log_result.stderr.strip()}")
+                return False
+
         if self._run_git("diff", "--cached", "--quiet").returncode == 0:
-            return True
+            print("  ERROR: Step 커밋에 포함할 변경 사항이 없습니다.")
+            return False
 
         msg = self.FEAT_MSG.format(phase=self._phase_name, num=step_num, name=step_name)
         result = self._run_git("commit", "-m", msg)
@@ -175,6 +207,14 @@ class StepExecutor:
             return True
 
         print(f"  ERROR: Step 커밋 실패: {result.stderr.strip()}")
+        return False
+
+    def _unstage_after_failed_commit(self) -> bool:
+        """커밋 실패 후 작업 트리는 보존하고 Git index만 HEAD로 되돌린다."""
+        result = self._run_git("reset", "--mixed", "HEAD")
+        if result.returncode == 0:
+            return True
+        print(f"  ERROR: 커밋 실패 후 staging 해제 실패: {result.stderr.strip()}")
         return False
 
     # --- top-level index ---
@@ -477,8 +517,8 @@ class StepExecutor:
         verify_snapshot = copy.deepcopy(step["verify"])
 
         for attempt in range(1, self.MAX_RETRIES + 1):
-            index = self._read_json(self._index_file)
-            step_context = self._build_step_context(index)
+            trusted_index = copy.deepcopy(self._read_json(self._index_file))
+            step_context = self._build_step_context(trusted_index)
             preamble = self._build_preamble(guardrails, step_context, prev_error)
 
             tag = f"Step {step_num}/{self._total - 1} ({done} done): {step_name}"
@@ -498,7 +538,7 @@ class StepExecutor:
                     f"사람의 확인이 필요합니다. before={head_before}, after={head_after}"
                 )
                 self._record_attempt(step, attempt, claude_output, None, None)
-                index = self._read_json(self._index_file)
+                index = copy.deepcopy(trusted_index)
                 for current in index["steps"]:
                     if current["step"] == step_num:
                         current["verify"] = copy.deepcopy(verify_snapshot)
@@ -520,7 +560,7 @@ class StepExecutor:
                 if claude_result["outcome"] == "blocked":
                     reason = claude_result["blocked_reason"]
                     self._record_attempt(step, attempt, claude_output, claude_result, None)
-                    index = self._read_json(self._index_file)
+                    index = copy.deepcopy(trusted_index)
                     for current in index["steps"]:
                         if current["step"] == step_num:
                             current["verify"] = copy.deepcopy(verify_snapshot)
@@ -547,7 +587,7 @@ class StepExecutor:
             self._record_attempt(step, attempt, claude_output, claude_result, verification)
 
             if verification is not None and verification["status"] == "passed":
-                index = self._read_json(self._index_file)
+                index = copy.deepcopy(trusted_index)
                 compact_verification = {
                     "status": "passed",
                     "verified_at": verification["verified_at"],
@@ -576,13 +616,19 @@ class StepExecutor:
                 self._write_json(self._index_file, index)
 
                 if not self._commit_step(step_num, step_name):
-                    index = self._read_json(self._index_file)
+                    self._unstage_after_failed_commit()
+                    index = copy.deepcopy(trusted_index)
                     for current in index["steps"]:
                         if current["step"] == step_num:
+                            current["verify"] = copy.deepcopy(verify_snapshot)
                             current["status"] = "error"
                             current["error_message"] = "독립 검증은 통과했지만 Step 커밋에 실패했습니다."
                             current["failed_at"] = self._stamp()
                             current.pop("completed_at", None)
+                            current.pop("verification", None)
+                            current.pop("summary", None)
+                            current.pop("blocked_reason", None)
+                            current.pop("blocked_at", None)
                     self._write_json(self._index_file, index)
                     self._update_top_index("error")
                     sys.exit(1)
@@ -591,7 +637,7 @@ class StepExecutor:
                 return True
 
             if attempt < self.MAX_RETRIES:
-                index = self._read_json(self._index_file)
+                index = copy.deepcopy(trusted_index)
                 for s in index["steps"]:
                     if s["step"] == step_num:
                         s["verify"] = copy.deepcopy(verify_snapshot)
@@ -605,7 +651,7 @@ class StepExecutor:
                 prev_error = err_msg
                 print(f"  ↻ Step {step_num}: retry {attempt}/{self.MAX_RETRIES} — {err_msg}")
             else:
-                index = self._read_json(self._index_file)
+                index = copy.deepcopy(trusted_index)
                 for s in index["steps"]:
                     if s["step"] == step_num:
                         s["verify"] = copy.deepcopy(verify_snapshot)

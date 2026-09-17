@@ -98,6 +98,30 @@ def executor(tmp_project, phase_dir):
     return inst
 
 
+@pytest.fixture
+def git_executor(executor):
+    """실제 Git commit/tree 검증용 저장소가 연결된 executor."""
+    def git(*args, check=True):
+        return subprocess.run(
+            ["git", *args],
+            cwd=executor._project_root,
+            capture_output=True,
+            text=True,
+            check=check,
+        )
+
+    git("init")
+    git("config", "user.name", "Harness Test")
+    git("config", "user.email", "harness@example.com")
+    (executor._project_root / ".gitignore").write_text(
+        "phases/**/step*-output.json\n",
+        encoding="utf-8",
+    )
+    git("add", "-A")
+    git("commit", "-m", "initial")
+    return executor
+
+
 # ---------------------------------------------------------------------------
 # _stamp (= 이전 now_iso)
 # ---------------------------------------------------------------------------
@@ -323,6 +347,41 @@ class TestUpdateTopIndex:
 
 
 # ---------------------------------------------------------------------------
+# clean worktree guard
+# ---------------------------------------------------------------------------
+
+class TestCleanWorktree:
+    def test_clean_worktree_passes(self, git_executor):
+        git_executor._ensure_clean_worktree()
+
+    @pytest.mark.parametrize("change_kind", ["tracked", "staged", "untracked"])
+    def test_dirty_worktree_exits(self, git_executor, change_kind):
+        project = git_executor._project_root
+        if change_kind == "tracked":
+            (project / "CLAUDE.md").write_text("changed", encoding="utf-8")
+        elif change_kind == "staged":
+            staged = project / "staged.txt"
+            staged.write_text("staged", encoding="utf-8")
+            subprocess.run(["git", "add", "staged.txt"], cwd=project, check=True)
+        else:
+            (project / "untracked.txt").write_text("untracked", encoding="utf-8")
+
+        with pytest.raises(SystemExit) as exc_info:
+            git_executor._ensure_clean_worktree()
+
+        assert exc_info.value.code == 1
+
+    def test_run_stops_before_checkout_when_worktree_is_dirty(self, executor):
+        executor._ensure_clean_worktree = MagicMock(side_effect=SystemExit(1))
+        executor._checkout_branch = MagicMock()
+
+        with pytest.raises(SystemExit):
+            executor.run()
+
+        executor._checkout_branch.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # _checkout_branch (mocked)
 # ---------------------------------------------------------------------------
 
@@ -407,10 +466,26 @@ class TestCommitStep:
             return MagicMock(returncode=0, stdout="", stderr="")
         executor._run_git = fake_git
 
-        executor._commit_step(2, "ui")
+        assert executor._commit_step(2, "ui") is False
 
         commit_msgs = [c[2] for c in calls if c[0] == "commit"]
         assert commit_msgs == []
+
+    def test_force_adds_ignored_step_output(self, executor):
+        output = executor._phase_dir / "step2-output.json"
+        output.write_text("{}", encoding="utf-8")
+        calls = []
+
+        def fake_git(*args):
+            calls.append(args)
+            if args[:2] == ("diff", "--cached"):
+                return MagicMock(returncode=1)
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        executor._run_git = fake_git
+
+        assert executor._commit_step(2, "ui") is True
+        assert ("add", "-f", "--", "phases/0-mvp/step2-output.json") in calls
 
 
 # ---------------------------------------------------------------------------
@@ -660,6 +735,130 @@ class TestHarnessOwnedCompletion:
         assert "Git HEAD" in self._step(executor)["blocked_reason"]
         executor._run_verification.assert_not_called()
         executor._commit_step.assert_not_called()
+
+    def test_commit_failure_restores_error_and_preserves_code(self, git_executor):
+        executor = git_executor
+        head_before = executor._git_head()
+
+        def invoke(_step, _preamble):
+            source = executor._project_root / "src" / "feature.txt"
+            source.parent.mkdir()
+            source.write_text("agent implementation", encoding="utf-8")
+            return claude_output()
+
+        def fail_after_staging(step_num, _step_name):
+            assert executor._run_git("add", "-A").returncode == 0
+            output = executor._phase_dir / f"step{step_num}-output.json"
+            assert executor._run_git(
+                "add", "-f", "--", str(output.relative_to(executor._project_root))
+            ).returncode == 0
+            return False
+
+        executor._invoke_claude = invoke
+        executor._run_verification = MagicMock(return_value=verification("passed"))
+        executor._commit_step = fail_after_staging
+
+        with pytest.raises(SystemExit) as exc_info:
+            executor._execute_single_step(self._step(executor), "guardrails")
+
+        assert exc_info.value.code == 1
+        step = self._step(executor)
+        assert step["status"] == "error"
+        assert "completed_at" not in step
+        assert "verification" not in step
+        assert "summary" not in step
+        assert (executor._project_root / "src" / "feature.txt").read_text() == "agent implementation"
+        assert executor._git_head() == head_before
+        assert executor._run_git("diff", "--cached", "--quiet").returncode == 0
+        assert "src/" in executor._run_git("status", "--porcelain").stdout
+
+    def test_success_creates_one_commit_with_code_state_and_log(self, git_executor):
+        executor = git_executor
+        head_before = executor._git_head()
+
+        def invoke(_step, _preamble):
+            source = executor._project_root / "src" / "feature.txt"
+            source.parent.mkdir()
+            source.write_text("agent implementation", encoding="utf-8")
+            return claude_output(summary="implemented feature")
+
+        executor._invoke_claude = invoke
+        executor._run_verification = MagicMock(return_value=verification("passed"))
+
+        assert executor._execute_single_step(self._step(executor), "guardrails") is True
+
+        head_after = executor._git_head()
+        assert head_after != head_before
+        count = executor._run_git("rev-list", "--count", f"{head_before}..{head_after}")
+        assert count.stdout.strip() == "1"
+
+        changed = executor._run_git("diff-tree", "--no-commit-id", "--name-only", "-r", head_after)
+        committed_paths = set(changed.stdout.splitlines())
+        assert "src/feature.txt" in committed_paths
+        assert "phases/0-mvp/index.json" in committed_paths
+        assert "phases/0-mvp/step2-output.json" in committed_paths
+
+        committed_index = json.loads(
+            executor._run_git("show", f"{head_after}:phases/0-mvp/index.json").stdout
+        )
+        committed_step = committed_index["steps"][2]
+        assert committed_step["status"] == "completed"
+        assert committed_step["verification"]["status"] == "passed"
+        assert committed_step["summary"] == "implemented feature"
+
+        committed_log = json.loads(
+            executor._run_git("show", f"{head_after}:phases/0-mvp/step2-output.json").stdout
+        )
+        assert committed_log["attempts"][0]["verification"]["status"] == "passed"
+        assert executor._run_git("status", "--porcelain").stdout == ""
+
+    def test_commit_failure_stops_before_next_step(self, executor):
+        index = executor._read_json(executor._index_file)
+        index["steps"].append({
+            "step": 3,
+            "name": "next",
+            "status": "pending",
+            "verify": [{"name": "check", "command": ["npm", "test"]}],
+        })
+        executor._write_json(executor._index_file, index)
+        (executor._phase_dir / "step3.md").write_text("# next", encoding="utf-8")
+
+        executor._git_head = MagicMock(return_value="abc123")
+        executor._invoke_claude = MagicMock(return_value=claude_output())
+        executor._run_verification = MagicMock(return_value=verification("passed"))
+        executor._commit_step = MagicMock(return_value=False)
+        executor._unstage_after_failed_commit = MagicMock(return_value=True)
+
+        with pytest.raises(SystemExit):
+            executor._execute_all_steps("guardrails")
+
+        assert executor._invoke_claude.call_count == 1
+        assert executor._read_json(executor._index_file)["steps"][3]["status"] == "pending"
+
+    def test_commit_success_allows_next_step(self, executor):
+        index = executor._read_json(executor._index_file)
+        index["steps"].append({
+            "step": 3,
+            "name": "next",
+            "status": "pending",
+            "verify": [{"name": "check", "command": ["npm", "test"]}],
+        })
+        executor._write_json(executor._index_file, index)
+        (executor._phase_dir / "step3.md").write_text("# next", encoding="utf-8")
+
+        executor._git_head = MagicMock(return_value="abc123")
+        executor._invoke_claude = MagicMock(return_value=claude_output())
+        executor._run_verification = MagicMock(return_value=verification("passed"))
+        executor._commit_step = MagicMock(return_value=True)
+
+        executor._execute_all_steps("guardrails")
+
+        assert executor._invoke_claude.call_count == 2
+        assert executor._commit_step.call_count == 2
+        assert all(
+            step["status"] == "completed"
+            for step in executor._read_json(executor._index_file)["steps"]
+        )
 
 
 # ---------------------------------------------------------------------------

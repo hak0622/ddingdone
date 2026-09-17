@@ -150,13 +150,14 @@ python3 scripts/execute.py {task-name} --push  # 실행 후 push
 
 execute.py가 자동으로 처리하는 것:
 
+- 실행 전 저장소 확인 — tracked/staged/untracked 변경이 하나라도 있으면 사용자 작업과 Agent 작업이 섞이지 않도록 중단
 - `feat-{task-name}` 브랜치 생성/checkout
 - 실제 프로젝트 루트에서 Claude, Git, 검증 명령 실행
 - 가드레일 주입 — 프로젝트의 CLAUDE.md + docs/*.md 내용을 매 step 프롬프트에 포함
 - 컨텍스트 누적 — 완료된 step의 summary를 다음 step 프롬프트에 전달
 - 독립 검증 — 실행 전 고정한 verify 명령을 Harness가 직접 실행하고 exit code를 판정
 - 자가 교정 — 검증 실패 시 최대 3회 재시도하며, 실패 명령과 stdout/stderr를 프롬프트에 피드백
-- Step 단위 단일 커밋 — 모든 검증이 성공한 경우에만 코드·상태·로그를 함께 커밋
+- Step 단위 단일 커밋 — 모든 검증이 성공한 경우에만 코드·상태·로그를 함께 커밋. 현재 Step의 `stepN-output.json`은 ignore 여부와 관계없이 명시적으로 stage한다.
 - Git HEAD 감시 — Claude 실행 전후 HEAD가 달라지면 blocked로 중단
 - 타임스탬프 — started_at, completed_at, failed_at, blocked_at 자동 기록
 
@@ -164,5 +165,6 @@ Harness가 보장하는 범위는 사전에 정의된 검증 명령의 exit code
 
 에러 복구:
 
+- **Step 커밋 실패 시**: Harness는 staging만 해제하고 trusted phase snapshot을 기준으로 Step을 `error` 처리한다. Claude가 변경한 기능 코드와 실행 로그는 작업 트리에 보존되며 다음 Step은 실행하지 않는다.
 - **error 발생 시**: `phases/{task-name}/index.json`에서 해당 step의 `status`를 `"pending"`으로 바꾸고 `error_message`를 삭제한 뒤 재실행한다.
 - **blocked 발생 시**: `blocked_reason`에 적힌 사유를 해결한 뒤, `status`를 `"pending"`으로 바꾸고 `blocked_reason`을 삭제한 뒤 재실행한다.
