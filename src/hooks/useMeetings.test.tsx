@@ -3,7 +3,7 @@ import { act } from 'react-dom/test-utils'
 import { createRoot, type Root } from 'react-dom/client'
 import { useMeetings } from './useMeetings'
 
-const onSnapshotMock = vi.fn(() => () => {})
+const onSnapshotMock = vi.fn<(...args: unknown[]) => () => void>(() => () => {})
 
 vi.mock('firebase/firestore', () => ({
   collection: vi.fn(() => ({ type: 'collection' })),

@@ -4,7 +4,7 @@ import { Asset, Top } from '@toss/tds-mobile'
 import { useUserStore } from '../store/userStore'
 import { useMeetings } from '../hooks/useMeetings'
 import type { MeetingListItem } from '../hooks/useMeetings'
-import { cloudinaryThumbnail } from '../lib/cloudinary'
+import MeetingPhotoThumbnail from '../components/MeetingPhotoThumbnail'
 
 const WEEK_DAYS = ['월', '화', '수', '목', '금', '토', '일']
 
@@ -246,20 +246,7 @@ export default function Home() {
                   ) : (
                     /* 방 있음: 사진 or 플레이스홀더 카드 */
                     <>
-                      {dayMeetings[0].photoUrl ? (
-                        <img
-                          src={cloudinaryThumbnail(dayMeetings[0].photoUrl, 150)}
-                          alt=""
-                          loading="lazy"
-                          style={{
-                            position: 'absolute',
-                            inset: 0,
-                            width: '100%',
-                            height: '100%',
-                            objectFit: 'cover',
-                          }}
-                        />
-                      ) : (
+                      <MeetingPhotoThumbnail meeting={dayMeetings[0]}>
                         <div
                           style={{
                             position: 'absolute',
@@ -281,7 +268,7 @@ export default function Home() {
                             <circle cx="12" cy="13" r="3.5" stroke="#b0c4f8" strokeWidth="1.5" />
                           </svg>
                         </div>
-                      )}
+                      </MeetingPhotoThumbnail>
                       {/* 1개 이상: 숫자 배지 */}
                       {dayMeetings.length >= 1 && (
                         <div

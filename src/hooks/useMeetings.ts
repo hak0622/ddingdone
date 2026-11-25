@@ -1,6 +1,7 @@
 import { useCallback, useSyncExternalStore } from 'react'
 import { collection, onSnapshot, query, where } from 'firebase/firestore'
 import { db } from '../lib/firebase'
+import { forgetMeetingPhoto } from './useMeetingPhoto'
 
 export interface MeetingListItem {
   id: string
@@ -8,9 +9,9 @@ export interface MeetingListItem {
   date: string
   memberCount: number
   totalAmount: number
-  expenseCount: number
   status: 'active' | 'settled'
-  photoUrl: string | null
+  photoVersion?: string | null
+  photoAccessConfirmed?: boolean
 }
 
 interface ListState {
@@ -49,6 +50,7 @@ function startListening(uid: string, entry: CacheEntry) {
   const q = query(collection(db, 'meetings'), where('memberUids', 'array-contains', uid))
   entry.unsub = onSnapshot(
     q,
+    { includeMetadataChanges: true },
     (snap) => {
       const results: MeetingListItem[] = snap.docs.map((d) => {
         const data = d.data()
@@ -56,19 +58,24 @@ function startListening(uid: string, entry: CacheEntry) {
           id: d.id,
           name: data.name,
           date: data.date,
-          memberCount: data.memberCount ?? 0,
+          memberCount: data.memberUids?.length ?? 0,
           totalAmount: data.totalAmount ?? 0,
-          expenseCount: data.expenseCount ?? 0,
           status: data.status ?? 'active',
-          photoUrl: data.photoUrl ?? null,
+          photoVersion: data.photoVersion ?? null,
+          photoAccessConfirmed: !snap.metadata.fromCache && !d.metadata.hasPendingWrites,
         }
       })
       results.sort((a, b) => (a.date < b.date ? 1 : -1))
+      const currentIds = new Set(results.map((meeting) => meeting.id))
+      for (const meeting of entry.state.meetings) {
+        if (!currentIds.has(meeting.id)) forgetMeetingPhoto(uid, meeting.id)
+      }
       entry.state = { meetings: results, loading: false }
       notify(entry)
     },
     () => {
-      entry.state = { ...entry.state, loading: false }
+      for (const meeting of entry.state.meetings) forgetMeetingPhoto(uid, meeting.id)
+      entry.state = { meetings: [], loading: false }
       notify(entry)
     },
   )
