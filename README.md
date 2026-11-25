@@ -36,8 +36,8 @@
 | UI | TDS Mobile, Emotion | 토스 디자인 시스템 기반 UI 구성 |
 | Backend | Firebase Authentication, Cloud Firestore | 익명 인증, 모임 데이터 저장 및 실시간 동기화 |
 | Security | Firestore Security Rules | 클라이언트 직접 접근 시 인증·멤버십·데이터 변경 범위 검증 |
-| Image | Cloudinary | 모임 대표 사진 저장 및 이미지 변환 |
-| Serverless | Cloudflare Workers | 인증된 Cloudinary 이미지 삭제 처리 |
+| Image | Cloud Firestore | 압축한 모임 대표 사진 저장 및 조회 |
+| Serverless | Cloudflare Worker·Workflow | 모임 관리, 비용·정산 검증, 회원 탈퇴 처리 |
 | Test | Vitest, React DOM Test Utils, jsdom | 정산 로직, 유틸리티 및 구독 캐시 테스트 |
 | Quality | ESLint, Prettier | 정적 분석 및 코드 스타일 관리 |
 
@@ -49,18 +49,17 @@
       └─ 띵돈 미니앱 (Apps in Toss)
           ├─ Firebase Authentication ─ 익명 사용자 인증
           ├─ Firestore Security Rules ─ 요청 권한 및 데이터 무결성 검증
-          │   └─ Cloud Firestore ─ 모임·멤버·지출 데이터 실시간 동기화
-          ├─ Cloudinary ─ 대표 사진 업로드 및 전송
-          └─ Cloudflare Worker ─ 사용자·모임 권한 검증 후 사진 삭제
+          │   └─ Cloud Firestore ─ 모임·참여자·지출·대표 사진 저장
+          └─ Cloudflare Worker·Workflow ─ 모임 관리, 정산, 회원 탈퇴 처리
 ```
 
-프론트엔드는 `ait build`로 앱인토스 번들을 생성하고 `ait deploy`로 배포합니다. Firestore는 별도의 애플리케이션 서버 없이 데이터 저장소와 실시간 구독을 담당하며, 접근 권한은 Firebase Authentication과 Firestore Security Rules로 제어합니다.
+프론트엔드는 `npm run dev`로 로컬에서 실행하고, `npm run build`로 앱인토스 번들(`ddingdone.ait`)을 생성합니다. 새 번들은 앱인토스 콘솔의 기존 띵돈 프로젝트에 업로드합니다. Firestore는 별도의 애플리케이션 서버 없이 데이터 저장소와 실시간 구독을 담당하며, 접근 권한은 Firebase Authentication과 Firestore Security Rules로 제어합니다.
 
-Cloudinary 업로드는 클라이언트에서 수행하되, API Secret이 필요한 이미지 삭제는 Cloudflare Worker를 통해 처리합니다. Worker는 Firebase ID 토큰과 해당 모임의 멤버 여부, 이미지 소유 경로를 검증한 뒤 Cloudinary 삭제 API를 호출합니다.
+앱은 대표 사진을 JPEG로 압축해 모임의 `photos/cover`에 저장합니다. 마지막 참여자가 나가면 Worker가 모임 데이터와 대표 사진을 함께 정리합니다.
 
 회원 탈퇴 화면에서 탈퇴 Worker를 호출하려면 앱의 `.env.local`에
 `VITE_ACCOUNT_DELETION_WORKER_URL`을 설정합니다. 이 값은 Worker의 공개 주소이며
-Firebase·Cloudinary 비밀키는 앱 환경변수에 넣지 않습니다.
+Firebase 서비스 계정 비밀키는 Worker에 보관합니다.
 
 ## 🔄아키텍처
 
