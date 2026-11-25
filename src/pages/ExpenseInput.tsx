@@ -1,11 +1,10 @@
+import { participantRoomRequest } from '../lib/participantRooms'
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { Asset, Top, Tooltip } from '@toss/tds-mobile'
-import { collection, doc, serverTimestamp, increment, writeBatch } from 'firebase/firestore'
+import { Top } from '@toss/tds-mobile'
+import { doc, serverTimestamp, runTransaction } from 'firebase/firestore'
 import { db } from '../lib/firebase'
-import { EXPENSE_SCHEMA_VERSION } from '../lib/expenseOwnership'
 import { useMeeting } from '../hooks/useMeeting'
-import { useUserStore } from '../store/userStore'
 
 const CATEGORIES = [
   { id: '식비', emoji: '🍖' },
@@ -15,57 +14,76 @@ const CATEGORIES = [
   { id: '기타', emoji: '🎟️' },
 ]
 
+function sameIds(left: readonly string[], right: readonly string[]) {
+  return left.length === right.length && left.every((id, index) => id === right[index])
+}
+
 export default function ExpenseInput() {
   const { id: meetingId } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const editId = searchParams.get('editId')
-  const { uid } = useUserStore()
   // 정산 완료 여부, 수정할 비용 데이터 모두 같은 모임을 보고 있는 다른 화면
   // (상세 등)과 공유되는 구독에서 그대로 가져온다 — 화면마다 따로 getDoc을
   // 또 호출할 필요가 없다.
-  const { meeting, expenses, expensesReady, loading } = useMeeting(meetingId)
+  const { meeting, members, expenses, expensesReady, loading, error: meetingError, access } = useMeeting(meetingId)
+
+  const myId = access?.participantId ?? ''
+  const currentIds = Object.keys(members).sort()
+  const target = expenses.find((expense) => expense.id === editId)
+  const locked = !!target && [target.paidBy, ...(target.splitMemberUids ?? [])].some((id) => !members[id])
+  const pendingCreation = useRef<{ action: string; expenseId: string; requestId: string; amount: number; category: string; memo: string; participantIds: string[] }>()
 
   const [amount, setAmount] = useState('')
   const [category, setCategory] = useState('')
-  const [memo, setMemo] = useState('')
-  const [showMemoHint, setShowMemoHint] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [originalAmount, setOriginalAmount] = useState(0)
   const [editLoaded, setEditLoaded] = useState(!editId)
+  const [splitDraft, setSplitDraft] = useState<{ formKey: string; excluded: string[] }>()
+  const originalRef = useRef<{ category: string; memo: string; splitMemberUids?: string[]; revision?: string }>({ category: '', memo: '' })
+  const originalSplit = originalRef.current.splitMemberUids
+  const showSplitPreview = !loading && editLoaded && currentIds.includes(myId)
+  const canSelectSplit = !locked
+  const splitMemberIds = showSplitPreview && meeting
+    ? [myId, ...currentIds.filter((memberId) => memberId !== myId)]
+    : []
+  const formKey = `${meetingId ?? ''}/${editId ?? ''}`
+  const defaultExcluded = originalSplit ? splitMemberIds.filter((id) => !originalSplit.includes(id)) : []
+  const excludedMembers = splitDraft?.formKey === formKey ? splitDraft.excluded : defaultExcluded
+  const selectedMemberIds = [...new Set([...(originalSplit ?? []), ...currentIds])]
+    .filter((memberId) => currentIds.includes(memberId) && !excludedMembers.includes(memberId))
+  const splitInvalid = !locked && showSplitPreview && !selectedMemberIds.length
   // 수정 모드에서 처음 불러온 값을 기억해, 제출 시 실제로 바뀐 게 있는지
   // 비교한다 — 아무것도 안 바꾸고 수정하기를 눌러도 쓰기가 나가지 않게 한다.
   // paidBy는 항상 본인이라 비교 대상에서 제외한다 — 다른 사람 비용을 대신
   // 추가/수정할 수 없게 하라는 실제 사용자 피드백에 따라 결제자 선택 UI를 없앴다.
-  const originalRef = useRef({ category: '', memo: '' })
   // expenses는 다른 멤버가 아무 비용이나 추가/수정/삭제할 때마다 새 배열로
   // 갱신된다. 한 번 폼에 채워 넣은 뒤에는 다시 채우면 안 된다 — 안 그러면
   // 수정 중인 화면에서 남이 다른 비용을 건드릴 때마다 입력 중인 값이
   // 원래 저장된 값으로 되돌아가 버린다.
-  const seededRef = useRef(false)
+  const seededRef = useRef<string>()
 
   useEffect(() => {
     if (!loading && meeting?.status === 'settled') navigate(-1)
-  }, [loading, meeting])
+  }, [loading, meeting, navigate])
 
   useEffect(() => {
-    if (!editId || !expensesReady || seededRef.current) return
-    seededRef.current = true
+    if (!editId || !expensesReady || loading || !myId || seededRef.current === formKey) return
+    seededRef.current = formKey
     const target = expenses.find((e) => e.id === editId)
     // 존재하지 않거나 본인 비용이 아니면(다른 사람 비용 수정 링크에 직접
     // 들어온 경우 포함) 막는다 — 본인 비용만 수정할 수 있다.
-    if (!target || target.paidBy !== uid) {
+    if (!target || target.createdBy !== myId) {
       navigate(-1)
       return
     }
     setAmount(String(target.amount))
     setOriginalAmount(target.amount)
     setCategory(target.category)
-    setMemo(target.memo)
-    originalRef.current = { category: target.category, memo: target.memo }
+    originalRef.current = { category: target.category, memo: target.memo, splitMemberUids: target.splitMemberUids, revision: target.revision }
     setEditLoaded(true)
-  }, [editId, expenses, expensesReady, uid])
+  }, [editId, expenses, expensesReady, formKey, loading, myId, navigate])
 
   // 한 건당 지출은 999만 9999원까지만 받는다 — 친구끼리 더치페이하는 항목
   // 단위로는 충분히 넉넉한 한도이면서, 자릿수를 7자리로 고정해 입력창이
@@ -83,11 +101,11 @@ export default function ExpenseInput() {
   }
 
   async function handleSubmit() {
-    if (Number(amount) === 0 || !uid || !meetingId || submitting) return
+    if (Number(amount) === 0 || !myId || !meetingId || submitting || splitInvalid || meetingError || !expensesReady) return
     if (editId) {
       const original = originalRef.current
       const unchanged = Number(amount) === originalAmount && category === original.category &&
-        memo === original.memo
+        (locked || !original.splitMemberUids || sameIds(selectedMemberIds, original.splitMemberUids))
       if (unchanged) {
         navigate(-1)
         return
@@ -96,51 +114,38 @@ export default function ExpenseInput() {
     setSubmitting(true)
     setError('')
     try {
-      const batch = writeBatch(db)
-      if (editId) {
-        const amountDifference = Number(amount) - originalAmount
-        batch.update(doc(db, 'meetings', meetingId, 'expenses', editId), {
-          amount: Number(amount),
-          category,
-          memo,
-          updatedBy: uid,
-          updatedAt: serverTimestamp(),
+      const meetingRef = doc(db, 'meetings', meetingId)
+      const original = originalRef.current
+      const metadataOnly = editId && Number(amount) === originalAmount &&
+        (locked || sameIds(selectedMemberIds, original.splitMemberUids ?? []))
+      if (metadataOnly) {
+        const expenseRef = doc(meetingRef, 'expenses', editId)
+        await runTransaction(db, async (transaction) => {
+          const existing = (await transaction.get(expenseRef)).data()
+          if (!existing || existing.revision !== original.revision) throw new Error('EXPENSE_CHANGED')
+          transaction.update(expenseRef, { category, updatedAt: serverTimestamp(), revision: crypto.randomUUID() })
         })
-        // 메모나 카테고리만 수정한 경우에는 totalAmount가 바뀌지 않으므로
-        // 방 문서에 increment(0) 쓰기를 보내지 않는다.
-        if (amountDifference !== 0) {
-          batch.update(doc(db, 'meetings', meetingId), {
-            totalAmount: increment(amountDifference),
-          })
-        }
       } else {
-        const expenseRef = doc(collection(db, 'meetings', meetingId, 'expenses'))
-        batch.set(expenseRef, {
-          amount: Number(amount),
-          category,
-          paidBy: uid,
-          createdBy: uid,
-          memo,
-          createdAt: serverTimestamp(),
-          updatedBy: uid,
-          updatedAt: serverTimestamp(),
-          schemaVersion: EXPENSE_SCHEMA_VERSION,
-        })
-        batch.update(doc(db, 'meetings', meetingId), {
-          totalAmount: increment(Number(amount)),
-          expenseCount: increment(1),
-        })
+        const expenseId = editId ?? pendingCreation.current?.expenseId ?? crypto.randomUUID()
+        const fields = { amount: Number(amount), category, memo: editId ? original.memo : '', participantIds: [...selectedMemberIds] }
+        const payload = editId
+          ? { ...fields, action: 'edit', expenseId, requestId: crypto.randomUUID(), revision: original.revision }
+          : (pendingCreation.current ??= { ...fields, action: 'create', expenseId, requestId: expenseId })
+        await participantRoomRequest(meetingId, 'expense', payload)
       }
-      await batch.commit()
       navigate(-1)
-    } catch {
-      setError(editId ? '비용을 수정하지 못했어요. 다시 시도해주세요.' : '비용을 추가하지 못했어요. 다시 시도해주세요.')
+    } catch (cause) {
+      setError(cause instanceof Error && ['MEMBERS_CHANGED', 'ROOM_CHANGED', 'EXPENSE_LOCKED'].includes(cause.message)
+        ? '참여자가 바뀌었어요. 함께 나눌 사람을 다시 확인해 주세요.'
+        : cause instanceof Error && cause.message === 'EXPENSE_CHANGED'
+          ? '비용이 바뀌었어요. 목록에서 다시 열어주세요.'
+          : editId ? '비용을 수정하지 못했어요. 다시 시도해주세요.' : '비용을 추가하지 못했어요. 다시 시도해주세요.')
     } finally {
       setSubmitting(false)
     }
   }
 
-  const isValid = Number(amount) > 0 && !submitting && editLoaded
+  const isValid = Number(amount) > 0 && !submitting && editLoaded && !splitInvalid && !!myId && !meetingError && expensesReady
 
   return (
     <>
@@ -168,6 +173,7 @@ export default function ExpenseInput() {
               placeholder="0"
               value={getDisplayAmount()}
               onChange={handleAmountChange}
+              readOnly={locked}
               inputMode="numeric"
             />
             <span style={{ fontSize: 24, fontWeight: 700, color: '#191919' }}>원</span>
@@ -204,50 +210,57 @@ export default function ExpenseInput() {
           </div>
         </div>
 
-        {/* 메모 */}
-        <div style={{ marginBottom: 20 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, margin: '0 0 8px' }}>
-            <p style={{ fontSize: 13, fontWeight: 600, color: '#888', margin: 0 }}>메모</p>
-            <Tooltip
-              open={showMemoHint}
-              onOpenChange={setShowMemoHint}
-              dismissible
-              placement="bottom"
-              message={<span style={{ fontWeight: 400 }}>비용 항목을 탭하면 메모를 볼 수 있어요</span>}
-            >
-              <button
-                type="button"
-                onClick={() => setShowMemoHint((v) => !v)}
-                style={{ display: 'flex', padding: 0, border: 'none', background: 'transparent', cursor: 'pointer' }}
-              >
-                <Asset.Icon
-                  frameShape={Asset.frameShape.CleanW16}
-                  backgroundColor="transparent"
-                  name="icon-info-circle-lightgrey"
-                  aria-hidden={true}
-                  ratio="1/1"
-                />
-              </button>
-            </Tooltip>
+        {locked && <p style={{ fontSize: 13, color: '#6b7684' }}>기존 분담 기록이 보존되어 금액과 분담 대상을 변경할 수 없어요.</p>}
+        {showSplitPreview && !locked && (
+          <div style={{ marginBottom: 20 }}>
+            <p id="split-members-label" style={{ fontSize: 13, fontWeight: 600, color: '#888', margin: '0 0 8px' }}>
+              함께 나눌 사람
+            </p>
+            <div role="group" aria-labelledby="split-members-label" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {splitMemberIds.map((memberUid) => {
+                const selected = !excludedMembers.includes(memberUid)
+                return (
+                  <button
+                    key={memberUid}
+                    type="button"
+                    aria-pressed={selected}
+                    disabled={submitting || !canSelectSplit}
+                    onClick={() => setSplitDraft({
+                      formKey,
+                      excluded: selected
+                        ? [...excludedMembers, memberUid]
+                        : excludedMembers.filter((excludedUid) => excludedUid !== memberUid),
+                    })}
+                    style={{
+                      padding: '10px 22px',
+                      borderRadius: 24,
+                      border: 'none',
+                      cursor: 'pointer',
+                      fontSize: 15,
+                      fontWeight: 600,
+                      background: selected ? '#3182F6' : '#f5f5f5',
+                      color: selected ? '#fff' : '#555',
+                    }}
+                  >
+                    {memberUid === myId ? '나' : (members[memberUid] ?? '참여자')}
+                  </button>
+                )
+              })}
+            </div>
+            {editId && !canSelectSplit && (
+              <p style={{ fontSize: 13, color: '#6B7684', margin: '8px 0 0' }}>
+                기존 비용은 모임 전체가 나눠요.
+              </p>
+            )}
+            {splitInvalid && (
+              <p role="status" style={{ fontSize: 13, color: '#6B7684', margin: '8px 0 0' }}>
+                {selectedMemberIds.length === 0
+                  ? '함께 나눌 사람을 한 명 이상 선택해 주세요.'
+                  : '이 모임에서는 아직 일부 인원만 선택해 저장할 수 없어요.'}
+              </p>
+            )}
           </div>
-          <input
-            value={memo}
-            onChange={(e) => setMemo(e.target.value)}
-            placeholder="예: 저녁 삼겹살"
-            maxLength={25}
-            style={{
-              width: '100%',
-              padding: '12px 14px',
-              fontSize: 16,
-              border: '1px solid #e0e0e0',
-              borderRadius: 10,
-              outline: 'none',
-              boxSizing: 'border-box',
-              color: '#191919',
-              background: '#fff',
-            }}
-          />
-        </div>
+        )}
 
         {error && (
           <p style={{ fontSize: 13, color: '#ef4444', textAlign: 'center', padding: '12px 0 0', margin: 0 }}>

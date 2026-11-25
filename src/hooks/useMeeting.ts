@@ -1,20 +1,18 @@
 import { useCallback, useSyncExternalStore } from 'react'
-import { doc, collection, onSnapshot, query, orderBy, type DocumentSnapshot, type Timestamp } from 'firebase/firestore'
+import { doc, collection, onSnapshot, query, orderBy, type DocumentSnapshot } from 'firebase/firestore'
 import { db } from '../lib/firebase'
-import { getExpenseAuthorUid } from '../lib/expenseOwnership'
+import { participantRoomRequest, type RoomAccess } from '../lib/participantRooms'
+import { type MeetingParticipants } from '../utils/meetingParticipants'
+import { type ExpenseShare } from '../utils/expenseShares'
 
 export interface Meeting {
   id: string
   name: string
   date: string
   memo: string
-  createdBy: string
   memberUids: string[]
-  photoUrl: string | null
-  photoPublicId: string | null
-  photoAssetId: string | null
-  photoUploadedBy: string | null
-  photoUploadedAt: Timestamp | null
+  photoVersion?: string | null
+  photoAccessConfirmed?: boolean
   status: 'active' | 'settled'
 }
 
@@ -29,16 +27,22 @@ export interface Expense {
   createdBy: string
   memo: string
   category: string
+  splitMemberUids?: string[]
+  shares: ExpenseShare[]
+  revision?: string
 }
 
 interface MeetingState {
   meeting: Meeting | null
   members: MemberMap
   expenses: Expense[]
+  participants?: MeetingParticipants
+  access?: Extract<RoomAccess, { mode: 'participants' }>
   meetingReady: boolean
   membersReady: boolean
   expensesReady: boolean
   error: boolean
+  ledgerError?: boolean
 }
 
 interface CacheEntry {
@@ -83,69 +87,124 @@ function mapMeeting(snap: DocumentSnapshot): Meeting | null {
     name: data.name,
     date: data.date,
     memo: data.memo,
-    createdBy: data.createdBy,
     memberUids: data.memberUids ?? [],
-    photoUrl: data.photoUrl ?? null,
-    photoPublicId: data.photoPublicId ?? null,
-    photoAssetId: data.photoAssetId ?? null,
-    photoUploadedBy: data.photoUploadedBy ?? null,
-    photoUploadedAt: data.photoUploadedAt ?? null,
+    photoVersion: data.photoVersion ?? null,
+    photoAccessConfirmed: !snap.metadata.fromCache && !snap.metadata.hasPendingWrites,
     status: data.status ?? 'active',
   }
 }
 
-function startListening(meetingId: string, entry: CacheEntry) {
-  const meetingUnsub = onSnapshot(
-    doc(db, 'meetings', meetingId),
-    (snap) => {
-      entry.state = { ...entry.state, meeting: mapMeeting(snap), meetingReady: true }
-      notify(entry)
-    },
-    () => {
-      entry.state = { ...entry.state, error: true, meetingReady: true }
-      notify(entry)
-    },
-  )
+export function refreshMeeting(meetingId: string) {
+  const entry = cache.get(meetingId)
+  if (!entry) return
+  entry.unsubs.forEach((unsubscribe) => unsubscribe())
+  entry.state = emptyState()
+  startListening(meetingId, entry)
+  notify(entry)
+}
 
-  const membersUnsub = onSnapshot(
-    collection(db, 'meetings', meetingId, 'members'),
-    (snap) => {
-      const map: MemberMap = {}
-      snap.forEach((d) => { map[d.id] = d.data().nickname })
-      entry.state = { ...entry.state, members: map, membersReady: true }
-      notify(entry)
-    },
-    () => {
-      entry.state = { ...entry.state, error: true, membersReady: true }
-      notify(entry)
-    },
-  )
+function startListening(meetingId: string, entry: CacheEntry) {
+  let stopped = false
+  let requestedAccess = false
+  let accessPending = false
+  let participantUnsub: (() => void) | undefined
+  function update(state: Partial<MeetingState>) {
+    if (stopped) return
+    entry.state = { ...entry.state, ...state }
+    notify(entry)
+  }
+
+  async function readParticipantAccess(inviteOnly: boolean) {
+    if (accessPending) return
+    accessPending = true
+    try {
+      const access = await participantRoomRequest<RoomAccess>(meetingId, 'access')
+      if (stopped) return
+      if (access.mode !== 'participants' || access.modelVersion !== 2) {
+        update({ error: true, meetingReady: true, membersReady: true })
+        return
+      }
+      if (inviteOnly || !access.participantId) {
+        const meeting = {
+          id: meetingId, name: access.name, status: access.canJoin ? 'active' : 'settled',
+          memberUids: [], date: '', memo: '',
+        } satisfies Meeting
+        update({ meeting, access, members: {}, participants: {}, expenses: [],
+          error: false, meetingReady: true, membersReady: true, expensesReady: true })
+        return
+      }
+      update({ access })
+      participantUnsub = onSnapshot(collection(db, 'meetings', meetingId, 'participants'), (snap) => {
+        const participants: MeetingParticipants = {}
+        const members: MemberMap = {}
+        snap.forEach((document) => {
+          const participant = document.data() as MeetingParticipants[string]
+          participants[document.id] = participant
+          if (participant.status === 'active' && participant.name) members[document.id] = participant.name
+        })
+        update({ participants, members, membersReady: true, error: false })
+      }, () => update({ participants: {}, members: {}, expenses: [], error: true, membersReady: true }))
+    } catch (error) {
+      if (error instanceof Error && error.message === 'ROOM_NOT_FOUND') {
+        update({ meeting: null, error: false, meetingReady: true, membersReady: true })
+      } else update({ error: true, meetingReady: true, membersReady: true })
+    } finally {
+      accessPending = false
+    }
+  }
+
+  const meetingUnsub = onSnapshot(doc(db, 'meetings', meetingId), { includeMetadataChanges: true }, (snap) => {
+    const meeting = mapMeeting(snap)
+    if (snap.metadata.fromCache) return
+    if (!meeting) {
+      participantUnsub?.()
+      update({ ...emptyState(), meetingReady: true, membersReady: true, expensesReady: true })
+      return
+    }
+    if (snap.data()?.participantModelVersion !== 2) {
+      update({ ...emptyState(), error: true, meetingReady: true, membersReady: true, expensesReady: true })
+      return
+    }
+    update({ meeting, meetingReady: true })
+    if (!requestedAccess) {
+      requestedAccess = true
+      void readParticipantAccess(false)
+    }
+  }, (error) => {
+    if (error.code !== 'permission-denied') {
+      update({ error: true, meetingReady: true, membersReady: true })
+      return
+    }
+    participantUnsub?.()
+    update({ meeting: null, members: {}, participants: {}, expenses: [], access: undefined, meetingReady: false, membersReady: false })
+    void readParticipantAccess(true)
+  })
 
   const expensesUnsub = onSnapshot(
     query(collection(db, 'meetings', meetingId, 'expenses'), orderBy('createdAt', 'asc')),
     (snap) => {
-      const list: Expense[] = []
-      snap.forEach((d) => {
-        const data = d.data()
-        list.push({
-          id: d.id,
-          amount: data.amount,
-          paidBy: data.paidBy,
-          createdBy: getExpenseAuthorUid(data),
-          memo: data.memo ?? '',
-          category: data.category ?? '',
+      const expenses: Expense[] = []
+      let invalidLedger = false
+      snap.forEach((document) => {
+        const data = document.data()
+        if (data.deleted === true) return
+        if (data.schemaVersion !== 4 || !Array.isArray(data.shares)) {
+          invalidLedger = true
+          return
+        }
+        expenses.push({
+          id: document.id, amount: data.amount, paidBy: data.paidBy, createdBy: data.createdBy,
+          memo: data.memo ?? '', category: data.category ?? '',
+          shares: data.shares, splitMemberUids: data.shares.map((share: ExpenseShare) => share.participantId),
+          revision: data.revision,
         })
       })
-      entry.state = { ...entry.state, expenses: list, expensesReady: true }
-      notify(entry)
+      update({ expenses: invalidLedger ? [] : expenses, expensesReady: true, ledgerError: invalidLedger })
     },
-    () => {
-      entry.state = { ...entry.state, error: true, expensesReady: true }
-      notify(entry)
-    },
+    () => update({ expenses: [], expensesReady: true, ...(entry.state.access?.participantId ? { error: true } : {}) }),
   )
 
-  entry.unsubs = [meetingUnsub, membersUnsub, expensesUnsub]
+  entry.unsubs = [() => { stopped = true; participantUnsub?.() }, meetingUnsub, expensesUnsub]
 }
 
 function getOrCreateEntry(meetingId: string): CacheEntry {
@@ -193,10 +252,12 @@ export function useMeeting(meetingId: string | undefined) {
   return {
     meeting: state.meeting,
     members: state.members,
+    participants: state.participants,
+    access: state.access,
     expenses: state.expenses,
     loading: !state.meetingReady || !state.membersReady,
     expensesReady: state.expensesReady,
-    error: state.error,
+    error: state.error || !!state.ledgerError,
   }
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Loader, Top } from '@toss/tds-mobile'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -6,6 +6,7 @@ import {
   confirmWithdrawal,
   createWithdrawalPreview,
   getWithdrawalStatus,
+  confirmWithdrawalScope,
   remainingPollDelay,
   type WithdrawalMeetingPreview,
   type WithdrawalPreview,
@@ -18,6 +19,7 @@ const SUPPORT_EMAIL = 'seounghak062@gmail.com'
 const TERMINAL_STATUSES = new Set(['complete', 'preview_stale', 'failed'])
 
 const ACTION_TEXT: Record<WithdrawalMeetingPreview['action'], string> = {
+  preserve_participant_records: '기존 정산 기록은 유지하고 내 계정과 모임의 연결을 삭제해요.',
   leave_active_shared: '내가 작성한 비용을 삭제하고 방에서 나가요.',
   anonymize_settled_shared: '정산 결과는 유지하고 내 정보와 작성 비용을 정리해요.',
   delete_solo_room: '나만 참여 중인 방과 비용, 사진을 모두 삭제해요.',
@@ -31,7 +33,6 @@ const ERROR_TEXT: Record<string, string> = {
   MANIFEST_NOT_FOUND: '탈퇴 정보가 만료됐어요. 다시 확인해주세요.',
   MANIFEST_INVALID_OR_EXPIRED: '탈퇴 정보가 만료됐어요. 다시 확인해주세요.',
   MANUAL_REVIEW_REQUIRED: '자동 처리할 수 없는 방이 있어요. 고객센터로 문의해주세요.',
-  INVALID_SUCCESSOR: '새 방장을 다시 선택해주세요.',
   PREVIEW_STALE: '방 정보가 변경됐어요. 최신 내용으로 다시 확인해주세요.',
   MEETING_LIMIT_EXCEEDED: '참여 중인 방이 많아 자동 처리할 수 없어요. 고객센터로 문의해주세요.',
   DOCUMENT_LIMIT_EXCEEDED: '비용 내역이 많은 방이 있어 자동 처리할 수 없어요. 고객센터로 문의해주세요.',
@@ -82,52 +83,24 @@ function Summary({ preview }: { preview: WithdrawalPreview }) {
       <p style={{ margin: '0 0 14px', fontSize: 17, fontWeight: 700 }}>탈퇴하면 이렇게 처리돼요</p>
       <div style={{ display: 'grid', gap: 10, fontSize: 14, color: '#555' }}>
         <span>참여 중인 정산방 <b style={{ color: COLORS.text }}>{summary.meetingCount}개</b></span>
-        <span>삭제되는 내가 작성한 비용 <b style={{ color: COLORS.text }}>{summary.activeExpenseCountToDelete + summary.settledExpenseCountToDelete}개</b></span>
         <span>전체 삭제되는 단독 방 <b style={{ color: COLORS.text }}>{summary.soloMeetingCountToDelete}개</b></span>
-        <span>방장이 이전되는 방 <b style={{ color: COLORS.text }}>{summary.ownershipTransferCount}개</b></span>
       </div>
     </Card>
   )
 }
 
-function MeetingCard({ meeting, selectedUid, onSelect }: {
-  meeting: WithdrawalMeetingPreview
-  selectedUid?: string
-  onSelect: (uid: string) => void
-}) {
-  const needsChoice = meeting.role === 'owner' && meeting.memberCount > 1 && !meeting.automaticSuccessorUid
+function MeetingCard({ meeting }: { meeting: WithdrawalMeetingPreview }) {
   return (
     <Card>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
         <p style={{ margin: 0, fontSize: 15, fontWeight: 700, overflowWrap: 'anywhere' }}>{meeting.name}</p>
         <span style={{ flexShrink: 0, fontSize: 12, color: meeting.action === 'manual_review' ? COLORS.error : COLORS.textSecondary }}>
-          {meeting.role === 'owner' ? '방장' : '참여자'}
+          참여자
         </span>
       </div>
       <p style={{ margin: '8px 0 0', color: '#666', fontSize: 13, lineHeight: 1.55 }}>{ACTION_TEXT[meeting.action]}</p>
       {meeting.authoredExpenseCount > 0 && (
         <p style={{ margin: '6px 0 0', color: COLORS.textSecondary, fontSize: 12 }}>내가 작성한 비용 {meeting.authoredExpenseCount}개</p>
-      )}
-      {needsChoice && (
-        <label style={{ display: 'block', marginTop: 14, fontSize: 13, fontWeight: 600 }}>
-          새 방장 선택
-          <select
-            aria-label={`${meeting.name} 새 방장`}
-            value={selectedUid ?? ''}
-            onChange={(event) => onSelect(event.target.value)}
-            style={{ width: '100%', height: 46, marginTop: 8, padding: '0 12px', border: `1px solid ${COLORS.border}`, borderRadius: 10, background: '#fff', fontSize: 14 }}
-          >
-            <option value="">선택해주세요</option>
-            {meeting.successorCandidates.map((candidate) => (
-              <option key={candidate.uid} value={candidate.uid}>{candidate.nickname || '이름 없는 참여자'}</option>
-            ))}
-          </select>
-        </label>
-      )}
-      {meeting.automaticSuccessorUid && (
-        <p style={{ margin: '10px 0 0', color: COLORS.textSecondary, fontSize: 12 }}>
-          남은 참여자에게 방장이 자동으로 이전돼요.
-        </p>
       )}
     </Card>
   )
@@ -193,7 +166,6 @@ function StatusView({ status, error, cleanupStatus, onRetry, onRestart }: {
 export default function AccountDeletion() {
   const navigate = useNavigate()
   const [preview, setPreview] = useState<WithdrawalPreview | null>(null)
-  const [successors, setSuccessors] = useState<Record<string, string>>({})
   const [agreed, setAgreed] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -202,21 +174,19 @@ export default function AccountDeletion() {
   const [cleanupStatus, setCleanupStatus] = useState<LocalCleanupStatus>('idle')
   const cleanupStarted = useRef(false)
 
-  const hasManualReview = Boolean(preview?.meetings.some((meeting) => meeting.action === 'manual_review'))
-  const choicesComplete = useMemo(() => preview?.meetings.every((meeting) => {
-    if (meeting.role !== 'owner' || meeting.memberCount <= 1 || meeting.automaticSuccessorUid) return true
-    return Boolean(successors[meeting.meetingId])
-  }) ?? false, [preview, successors])
+  const hasManualReview = Boolean(preview?.meetings.some((meeting) =>
+    meeting.action !== 'preserve_participant_records' && (meeting.action !== 'delete_solo_room' || meeting.role === 'owner')))
 
   useEffect(() => {
     if (!request) return
+    const { requestId, statusToken } = request
     let cancelled = false
     let timer: number | undefined
 
     async function poll() {
       const startedAt = performance.now()
       try {
-        const next = await getWithdrawalStatus(request.requestId, request.statusToken)
+        const next = await getWithdrawalStatus(requestId, statusToken)
         if (!cancelled) {
           setStatus(next)
           setError('')
@@ -256,9 +226,10 @@ export default function AccountDeletion() {
     setError('')
     try {
       const result = await createWithdrawalPreview()
-      const automatic = Object.fromEntries(result.meetings.flatMap((meeting) =>
-        meeting.automaticSuccessorUid ? [[meeting.meetingId, meeting.automaticSuccessorUid]] : []))
-      setSuccessors(automatic)
+      if ('activeRequestId' in result) {
+        setRequest({ requestId: result.activeRequestId, statusToken: '' })
+        return
+      }
       setPreview(result)
     } catch (previewError) {
       setError(errorMessage(previewError))
@@ -268,11 +239,11 @@ export default function AccountDeletion() {
   }
 
   async function handleConfirm() {
-    if (!preview || !agreed || !choicesComplete || hasManualReview) return
+    if (!preview || !agreed || hasManualReview) return
     setLoading(true)
     setError('')
     try {
-      const result = await confirmWithdrawal(preview, successors)
+      const result = await confirmWithdrawal(preview, {})
       setRequest({ requestId: result.requestId, statusToken: result.statusToken })
       setStatus(null)
     } catch (confirmError) {
@@ -287,6 +258,33 @@ export default function AccountDeletion() {
     } finally {
       setLoading(false)
     }
+  }
+
+  async function handleScopeConfirmation() {
+    if (!request || !status?.scopeRevision) return
+    setLoading(true)
+    setError('')
+    try {
+      await confirmWithdrawalScope(request.requestId, status.scopeRevision)
+    } catch (confirmationError) {
+      setError(errorMessage(confirmationError))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (status?.status === 'awaiting_reconfirmation') {
+    return (
+      <>
+        <Top title={<Top.TitleParagraph size={22}>삭제 범위 확인</Top.TitleParagraph>} />
+        <main style={{ padding: 24 }}>
+          <p>‘{status.scopeMeetingName}’에 나만 남았어요. 탈퇴를 계속하면 이 방과 지출 기록, 대표 사진이 모두 삭제돼요.</p>
+          <p>확인할 때까지 탈퇴 처리가 멈춰요.</p>
+          {error && <p role="alert">{error}</p>}
+          <PrimaryButton disabled={loading} onClick={handleScopeConfirmation}>이 방도 삭제하고 탈퇴 계속하기</PrimaryButton>
+        </main>
+      </>
+    )
   }
 
   if (request) {
@@ -323,8 +321,7 @@ export default function AccountDeletion() {
             <ul style={{ margin: '24px 0', paddingLeft: 20, color: '#555', fontSize: 14, lineHeight: 1.9 }}>
               <li>혼자 사용한 정산방은 비용 내역과 사진까지 모두 삭제돼요.</li>
               <li>
-                다른 참여자가 있는 정산방은 그대로 유지돼요.<br />
-                내가 방장이라면 다른 참여자에게 방장 권한이 이전돼요.
+                다른 참여자가 있는 정산방은 유지돼요. 기존 형식의 방은 방장 권한 이전이 필요할 수 있어요.
               </li>
               <li>완료된 정산 기록은 유지되지만 내 정보는 알아볼 수 없도록 처리돼요.</li>
             </ul>
@@ -360,8 +357,6 @@ export default function AccountDeletion() {
                 <MeetingCard
                   key={meeting.meetingId}
                   meeting={meeting}
-                  selectedUid={successors[meeting.meetingId]}
-                  onSelect={(uid) => setSuccessors((current) => ({ ...current, [meeting.meetingId]: uid }))}
                 />
               ))}
             </div>
@@ -375,7 +370,7 @@ export default function AccountDeletion() {
                 삭제되는 데이터는 복구할 수 없으며 위 내용을 모두 확인했어요.
               </label>
             )}
-            <PrimaryButton danger disabled={loading || !agreed || !choicesComplete || hasManualReview} onClick={handleConfirm}>
+            <PrimaryButton danger disabled={loading || !agreed || hasManualReview} onClick={handleConfirm}>
               {loading ? '탈퇴 요청 중...' : '탈퇴하기'}
             </PrimaryButton>
             <button type="button" disabled={loading} onClick={handlePreview} style={{ width: '100%', marginTop: 10, padding: 14, border: 0, background: 'none', color: COLORS.textSecondary, fontSize: 14 }}>최신 내용 다시 확인</button>

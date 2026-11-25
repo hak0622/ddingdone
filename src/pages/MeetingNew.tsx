@@ -1,9 +1,8 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { TextField, Top } from '@toss/tds-mobile'
 import DatePicker from '../components/DatePicker'
-import { collection, doc, serverTimestamp, writeBatch } from 'firebase/firestore'
-import { db } from '../lib/firebase'
+import { participantRoomRequest } from '../lib/participantRooms'
 import { useUserStore } from '../store/userStore'
 import ResultScreen from '../components/ResultScreen'
 import { shareInviteLink } from '../lib/bridge'
@@ -16,43 +15,12 @@ function getTodayString(): string {
   return `${yyyy}.${mm}.${dd}`
 }
 
-async function createMeeting(
-  fields: { name: string; date: string; memo: string },
-  uid: string,
-  nickname: string
-): Promise<string> {
-  const meetingRef = doc(collection(db, 'meetings'))
-  const batch = writeBatch(db)
-
-  batch.set(meetingRef, {
-    name: fields.name.trim(),
-    date: fields.date,
-    memo: fields.memo,
-    createdBy: uid,
-    createdAt: serverTimestamp(),
-    photoUrl: null,
-    photoPublicId: null,
-    photoAssetId: null,
-    photoUploadedBy: null,
-    photoUploadedAt: null,
-    status: 'active',
-    memberUids: [uid],
-    memberCount: 1,
-    totalAmount: 0,
-    expenseCount: 0,
-  })
-
-  batch.set(doc(db, 'meetings', meetingRef.id, 'members', uid), { nickname })
-
-  await batch.commit()
-  return meetingRef.id
-}
-
 export default function MeetingNew() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const { uid, nickname } = useUserStore()
+  const { nickname } = useUserStore()
 
+  const creationId = useRef<string>()
   const [name, setName] = useState('')
   const [date, setDate] = useState(searchParams.get('date') ?? getTodayString())
   const [memo, setMemo] = useState('')
@@ -67,7 +35,8 @@ export default function MeetingNew() {
     setSubmitting(true)
     setError('')
     try {
-      const meetingId = await createMeeting({ name, date, memo }, uid, nickname)
+      const roomId = creationId.current ??= crypto.randomUUID()
+      const { roomId: meetingId } = await participantRoomRequest<{ roomId: string }>(null, 'create', { roomId, name, date, memo, nickname })
       setCreatedId(meetingId)
     } catch {
       setError('정산방을 만들지 못했어요. 다시 시도해주세요.')

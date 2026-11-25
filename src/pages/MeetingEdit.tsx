@@ -13,7 +13,7 @@ export default function MeetingEdit() {
   const { uid } = useUserStore()
   // MeetingDetail 등 같은 모임을 보는 다른 화면과 구독을 공유한다 — 이 화면만을
   // 위해 모임 문서를 또 getDoc으로 읽지 않는다.
-  const { meeting, members, loading: meetingLoading, error: meetingError } = useMeeting(id)
+  const { meeting, members, loading: meetingLoading, error: meetingError, access } = useMeeting(id)
 
   const [name, setName] = useState('')
   const [date, setDate] = useState('')
@@ -34,14 +34,14 @@ export default function MeetingEdit() {
   useEffect(() => {
     if (meetingLoading || seededRef.current) return
     if (meetingError || !meeting) { setLoadError(true); return }
-    if (!members[uid]) { setNotMember(true); return }
+    if (!members[access?.participantId ?? '']) { setNotMember(true); return }
     setName(meeting.name ?? '')
     setDate(meeting.date ?? '')
     setMemo(meeting.memo ?? '')
     setLoaded(true)
     originalRef.current = { name: meeting.name ?? '', date: meeting.date ?? '', memo: meeting.memo ?? '' }
     seededRef.current = true
-  }, [meetingLoading, meeting, meetingError, members, uid])
+  }, [meetingLoading, meeting, meetingError, members, uid, access])
 
   async function handleSubmit() {
     if (!id || !name.trim() || submitting) return

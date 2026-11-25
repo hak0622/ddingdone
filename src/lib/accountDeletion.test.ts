@@ -9,6 +9,7 @@ import {
 } from './accountDeletion'
 
 vi.mock('./firebase', () => ({
+  useFirebaseEmulators: false,
   getIdToken: vi.fn(async () => 'firebase-token'),
 }))
 
@@ -49,7 +50,7 @@ describe('account deletion API', () => {
     )
 
     await expect(createWithdrawalPreview()).resolves.toEqual(preview)
-    expect(fetchMock).toHaveBeenCalledWith('https://worker.example/withdrawal/preview', {
+    expect(fetchMock).toHaveBeenCalledWith('https://worker.example/withdrawal/preview?resume=1', {
       method: 'POST',
       headers: { Authorization: 'Bearer firebase-token' },
     })

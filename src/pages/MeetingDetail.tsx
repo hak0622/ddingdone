@@ -1,15 +1,18 @@
+import { participantRoomRequest } from '../lib/participantRooms'
+import { participantDisplayName } from '../utils/meetingParticipants'
+import { useSettlementSnapshot } from '../hooks/useSettlementSnapshot'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Asset, BottomSheet, ConfirmDialog, FixedBottomCTA, List, ListRow, TextField, Top, useBottomSheet } from '@toss/tds-mobile'
-import { doc, updateDoc, writeBatch, increment, arrayUnion, arrayRemove, serverTimestamp } from 'firebase/firestore'
 import { formatKRW, truncateName } from '../utils/format'
+import { groupExpensesByPayer } from '../utils/expenseShares'
+import { buildV2SettlementSnapshot } from '../utils/settlementSnapshot'
 import { COLORS } from '../styles/tokens'
-import { db } from '../lib/firebase'
-import { uploadImage, deleteImage, cloudinaryThumbnail } from '../lib/cloudinary'
+import { saveMeetingPhoto } from '../lib/meetingPhoto'
+import { forgetMeetingPhoto, useMeetingPhoto } from '../hooks/useMeetingPhoto'
 import { shareInviteLink } from '../lib/bridge'
-import { useMeeting, type Expense } from '../hooks/useMeeting'
+import { refreshMeeting, useMeeting, type Expense } from '../hooks/useMeeting'
 import { useUserStore } from '../store/userStore'
-import ResultScreen from '../components/ResultScreen'
 
 const CATEGORY_EMOJI: Record<string, string> = {
   식비: '🍖',
@@ -18,6 +21,16 @@ const CATEGORY_EMOJI: Record<string, string> = {
   교통: '🚕',
   기타: '🎟️',
 }
+
+const expenseActionStyle = {
+  padding: '4px 10px',
+  borderRadius: 20,
+  border: 0,
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+} as const
 
 function CameraIcon({ color = '#aaa' }: { color?: string }) {
   return (
@@ -36,24 +49,21 @@ function CameraIcon({ color = '#aaa' }: { color?: string }) {
 
 const OVERLAY_GRADIENT = 'linear-gradient(to bottom, transparent 25%, rgba(0,0,0,0.72) 100%)'
 const MEMBER_CHIP_LIMIT = 3
-const HERO_PHOTO_SIZE = 800
 
 export default function MeetingDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { meeting, members, expenses, loading, error } = useMeeting(id)
-  const { uid, nickname: myNickname, setUser } = useUserStore()
+  const { meeting, members, expenses, loading, error, participants, access } = useMeeting(id)
+  const { uid, nickname: myNickname } = useUserStore()
+  const [failedPhotoSrc, setFailedPhotoSrc] = useState<string>()
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState(false)
   const [pendingFile, setPendingFile] = useState<File | null>(null)
   const [pendingPreview, setPendingPreview] = useState<string | null>(null)
   const [joinNickname, setJoinNickname] = useState('')
   const [joining, setJoining] = useState(false)
-  const [joinedNickname, setJoinedNickname] = useState<string | null>(null)
   const [joinError, setJoinError] = useState('')
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
-  const [confirmDeleteMeeting, setConfirmDeleteMeeting] = useState(false)
-  const [deletingMeeting, setDeletingMeeting] = useState(false)
   const [confirmLeaveMeeting, setConfirmLeaveMeeting] = useState(false)
   const [leaving, setLeaving] = useState(false)
   const [actionError, setActionError] = useState('')
@@ -62,6 +72,14 @@ export default function MeetingDetail() {
   const { open: openMembersSheet, close: closeMembersSheet } = useBottomSheet()
   const { open: openExpenseSheet, close: closeExpenseSheet } = useBottomSheet()
   const isSettled = meeting?.status === 'settled'
+  const myId = access?.participantId ?? ''
+  const stored = useSettlementSnapshot(id, !!myId && isSettled)
+  const displayName = (participantId: string) => participants
+    ? participantDisplayName(participants, participantId)
+    : members[participantId] ?? '알 수 없음'
+  const canSeePhoto = !error && !!uid && meeting?.photoAccessConfirmed === true && meeting.memberUids.includes(uid)
+  const photo = useMeetingPhoto(meeting?.id, meeting?.photoVersion, canSeePhoto)
+  const photoSrc = photo !== failedPhotoSrc ? photo : null
 
   useEffect(() => {
     return () => { if (pendingPreview) URL.revokeObjectURL(pendingPreview) }
@@ -82,16 +100,8 @@ export default function MeetingDetail() {
     setJoining(true)
     setJoinError('')
     try {
-      const batch = writeBatch(db)
-      batch.set(doc(db, 'meetings', id, 'members', uid), { nickname })
-      batch.update(doc(db, 'meetings', id), {
-        memberUids: arrayUnion(uid),
-        memberCount: increment(1),
-      })
-      await batch.commit()
-      localStorage.setItem('ddingdone_nickname', nickname)
-      setUser(uid, nickname)
-      setJoinedNickname(nickname)
+      await participantRoomRequest(id, 'join', { nickname })
+      refreshMeeting(id)
     } catch {
       setJoinError('참여에 실패했어요. 다시 시도해주세요.')
     } finally {
@@ -118,21 +128,10 @@ export default function MeetingDetail() {
     if (!pendingFile || !id) return
     setUploading(true)
     try {
-      const previousPublicId = meeting?.photoPublicId ?? null
-      const { url, publicId, assetId } = await uploadImage(pendingFile, id)
-      await updateDoc(doc(db, 'meetings', id), {
-        photoUrl: url,
-        photoPublicId: publicId,
-        photoAssetId: assetId,
-        photoUploadedBy: uid,
-        photoUploadedAt: serverTimestamp(),
-      })
+      await saveMeetingPhoto(id, pendingFile)
       if (pendingPreview) URL.revokeObjectURL(pendingPreview)
       setPendingFile(null)
       setPendingPreview(null)
-      if (previousPublicId && previousPublicId !== publicId) {
-        deleteImage(previousPublicId, id).catch((err) => console.error('이전 사진 삭제 실패', err))
-      }
     } catch (err) {
       console.error('사진 업로드 실패', err)
       setUploadError(true)
@@ -147,57 +146,13 @@ export default function MeetingDetail() {
     setTimeout(() => setActionError(''), 3000)
   }
 
-  async function handleReopenMeeting() {
-    if (!id) return
-    closeManageSheet()
-    try {
-      const batch = writeBatch(db)
-      batch.delete(doc(db, 'meetings', id, 'settlements', 'final'))
-      batch.update(doc(db, 'meetings', id), { status: 'active' })
-      await batch.commit()
-    } catch {
-      showActionError('다시 열지 못했어요. 다시 시도해주세요.')
-    }
-  }
-
-  async function handleDeleteMeeting() {
-    if (!id || deletingMeeting) return
-    setDeletingMeeting(true)
-    try {
-      // 사진 삭제는 모임 문서가 아직 살아있을 때 해야 한다 — Worker가 멤버인지
-      // 확인하려면 meetings/{id} 문서를 조회해야 하는데, 문서를 먼저 지워버리면
-      // 정당한 요청인데도 "모임을 찾을 수 없음"으로 거부된다.
-      if (meeting?.photoPublicId) {
-        await deleteImage(meeting.photoPublicId, id).catch((err) => console.error('모임 사진 삭제 실패', err))
-      }
-      const batch = writeBatch(db)
-      Object.keys(members).forEach((memberUid) => {
-        batch.delete(doc(db, 'meetings', id, 'members', memberUid))
-      })
-      expenses.forEach((e) => {
-        batch.delete(doc(db, 'meetings', id, 'expenses', e.id))
-      })
-      batch.delete(doc(db, 'meetings', id))
-      await batch.commit()
-      navigate('/')
-    } catch {
-      showActionError('삭제하지 못했어요. 다시 시도해주세요.')
-    } finally {
-      setDeletingMeeting(false)
-    }
-  }
-
   async function handleLeaveMeeting() {
-    if (!id || !uid || leaving) return
+    if (!id || !uid || !myId || leaving) return
     setLeaving(true)
     try {
-      const batch = writeBatch(db)
-      batch.delete(doc(db, 'meetings', id, 'members', uid))
-      batch.update(doc(db, 'meetings', id), {
-        memberUids: arrayRemove(uid),
-        memberCount: increment(-1),
-      })
-      await batch.commit()
+      await participantRoomRequest(id, 'leave', { participantId: myId })
+      forgetMeetingPhoto(uid, id)
+      refreshMeeting(id)
       navigate('/')
     } catch {
       showActionError('나가지 못했어요. 다시 시도해주세요.')
@@ -206,26 +161,13 @@ export default function MeetingDetail() {
     }
   }
 
-  function handleLeaveClick() {
-    closeManageSheet()
-    // 본인이 추가한 비용이 남아있는 채로 나가면, 그 비용은 totalAmount에는 계속
-    // 반영되면서 1인당 정산 인원수(members 문서 수)에서는 빠져버려 다른 멤버가
-    // 떠안게 된다. 먼저 본인 비용을 직접 지운(이미 가능한 기능) 뒤에만 나가게 한다.
-    if (expenses.some((e) => e.paidBy === uid)) {
-      showActionError('등록한 비용을 먼저 삭제해주세요.')
-      return
-    }
-    setConfirmLeaveMeeting(true)
-  }
-
   function openManage() {
-    const isCreator = uid === meeting?.createdBy
     openManageSheet({
       header: <BottomSheet.Header>관리</BottomSheet.Header>,
       onDimmerClick: closeManageSheet,
       children: (
         <div style={{ padding: '0 20px 8px' }}>
-          <button
+          {!isSettled && <button
             onClick={() => { closeManageSheet(); navigate(`/meetings/${id}/edit`) }}
             style={{
               width: '100%',
@@ -240,27 +182,9 @@ export default function MeetingDetail() {
             }}
           >
             방 정보 수정
-          </button>
-          {isCreator && isSettled && (
-            <button
-              onClick={handleReopenMeeting}
-              style={{
-                width: '100%',
-                padding: '16px 0',
-                background: 'none',
-                border: 'none',
-                borderBottom: '1px solid #f0f0f0',
-                textAlign: 'left',
-                fontSize: 16,
-                color: '#191919',
-                cursor: 'pointer',
-              }}
-            >
-              정산 다시 열기
-            </button>
-          )}
+          </button>}
           <button
-            onClick={isCreator ? () => { closeManageSheet(); setConfirmDeleteMeeting(true) } : handleLeaveClick}
+            onClick={() => { closeManageSheet(); setConfirmLeaveMeeting(true) }}
             style={{
               width: '100%',
               padding: '16px 0',
@@ -272,7 +196,7 @@ export default function MeetingDetail() {
               cursor: 'pointer',
             }}
           >
-            {isCreator ? '삭제' : '나가기'}
+            나가기
           </button>
         </div>
       ),
@@ -283,16 +207,10 @@ export default function MeetingDetail() {
     if (!id) return
     const expense = expenses.find((e) => e.id === expenseId)
     if (!expense) return
-    const batch = writeBatch(db)
-    batch.delete(doc(db, 'meetings', id, 'expenses', expenseId))
-    batch.update(doc(db, 'meetings', id), {
-      totalAmount: increment(-expense.amount),
-      expenseCount: increment(-1),
-    })
     try {
-      await batch.commit()
+      await participantRoomRequest(id, 'expense', { action: 'delete', expenseId, revision: expense.revision })
     } catch {
-      showActionError('비용을 삭제하지 못했어요. 다시 시도해주세요.')
+      showActionError('비용을 삭제하지 못했어요. 화면을 갱신한 뒤 다시 시도해 주세요.')
     }
   }
 
@@ -365,17 +283,7 @@ export default function MeetingDetail() {
     )
   }
 
-  const isNotMember = !loading && !!uid && !members[uid]
-
-  if (joinedNickname) {
-    return (
-      <ResultScreen
-        title={`${joinedNickname}로 참여했어요!`}
-        subtitle="이제 비용을 함께 기록할 수 있어요"
-        onConfirm={() => setJoinedNickname(null)}
-      />
-    )
-  }
+  const isNotMember = !loading && !!uid && !members[myId]
 
   if (isNotMember) {
     // 닉네임이 아예 없는 첫 진입자는 "참여하시겠어요?" 확인 질문 없이, 앱
@@ -489,17 +397,21 @@ export default function MeetingDetail() {
   // Firestore 구독 결과의 순서는 보장되지 않아 새 멤버가 들어올 때마다 순서가
   // 흔들릴 수 있다. "나"는 항상 맨 앞에 고정한다.
   const memberEntries = Object.entries(members).sort(([a], [b]) => {
-    if (a === uid) return -1
-    if (b === uid) return 1
+    if (a === myId) return -1
+    if (b === myId) return 1
     return 0
   })
   const visibleMemberEntries = memberEntries.slice(0, MEMBER_CHIP_LIMIT)
   const hasMoreMembers = memberEntries.length > MEMBER_CHIP_LIMIT
   const totalAmount = expenses.reduce((sum, e) => sum + e.amount, 0)
-  const perPerson = memberEntries.length > 0 ? Math.floor(totalAmount / memberEntries.length) : 0
-
-  const myPaid = expenses.filter((e) => e.paidBy === uid).reduce((s, e) => s + e.amount, 0)
-  const myBalance = myPaid - perPerson
+  const myPaid = expenses.filter((e) => e.paidBy === myId).reduce((s, e) => s + e.amount, 0)
+  const participantIds = Object.keys(participants ?? {}).sort()
+  const splits = isSettled ? stored.snapshot : buildV2SettlementSnapshot(participantIds, expenses)
+  const myBurden = splits?.participantBurdenTotals?.[myId] ?? 0
+  const myBalance = myPaid - myBurden
+  const myTransfers = splits?.transfers.filter(({ from, to }) => from === myId || to === myId) ?? []
+  const hasIncomingAndOutgoing = myTransfers.some(({ from }) => from === myId) &&
+    myTransfers.some(({ to }) => to === myId)
 
   function openAllMembers() {
     openMembersSheet({
@@ -519,7 +431,7 @@ export default function MeetingDetail() {
               }}
             >
               <span style={{ fontSize: 15, color: '#191919' }}>
-                {memberUid === uid ? `${name}(나)` : name}
+                {memberUid === myId ? `${name}(나)` : name}
               </span>
             </div>
           ))}
@@ -528,22 +440,80 @@ export default function MeetingDetail() {
     })
   }
 
-  function openExpenseDetail(expense: Expense) {
+  function openPayerExpenses(name: string, payerExpenses: Expense[]) {
     openExpenseSheet({
       header: (
-        <>
-          <BottomSheet.Header>메모</BottomSheet.Header>
-          <BottomSheet.HeaderDescription>
-            <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#888', marginBottom: 8 }}>
-              내용
+        <BottomSheet.Header>
+          <span style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
+            <span>{name}의 지출 내역</span>
+            <span style={{ fontSize: 14, fontWeight: 500, color: '#6B7684', whiteSpace: 'nowrap' }}>
+              {payerExpenses.length}건
             </span>
-            <span style={{ display: 'block', fontSize: 15, color: '#191919', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-              {expense.memo || '메모가 없어요'}
-            </span>
-          </BottomSheet.HeaderDescription>
-        </>
+          </span>
+        </BottomSheet.Header>
       ),
       onDimmerClick: closeExpenseSheet,
+      children: (
+        <List style={{ maxHeight: '60vh', overflowY: 'auto', padding: '0 0 24px' }}>
+          {[...payerExpenses].reverse().map((expense) => {
+            const canEdit = !isSettled && expense.createdBy === myId
+            const locked = [expense.paidBy, ...(expense.splitMemberUids ?? [])].some((id) => !members[id])
+            const title = `${expense.category || '기타'} · ${formatKRW(expense.amount)}`
+            return (
+              <ListRow
+                key={expense.id}
+                border="indented"
+                left={<ListRow.AssetText shape="squircle" size="small">{CATEGORY_EMOJI[expense.category] || '💳'}</ListRow.AssetText>}
+                contents={(
+                  <div style={{ minWidth: 0, width: '100%' }}>
+                    <ListRow.Texts type="1RowTypeA" top={title} />
+                    {!!expense.splitMemberUids?.length && (
+                      <div
+                        role="group"
+                        aria-label="함께 나눈 사람"
+                        tabIndex={0}
+                        style={{
+                          display: 'flex', gap: 4, overflowX: 'auto', overscrollBehaviorX: 'contain',
+                          scrollbarWidth: 'none', marginTop: 4,
+                        }}
+                      >
+                        {expense.splitMemberUids.map((participantId) => (
+                          <span
+                            key={participantId}
+                            style={{ flexShrink: 0, whiteSpace: 'nowrap', padding: '2px 7px', borderRadius: 12, background: '#F2F4F6', color: '#4E5968', fontSize: 12 }}
+                          >
+                            {participantId === myId ? '나' : displayName(participantId)}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                right={canEdit && (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      type="button"
+                      style={{ ...expenseActionStyle, color: COLORS.primary, background: '#EBF2FF' }}
+                      onClick={() => {
+                        closeExpenseSheet()
+                        navigate(`/meetings/${id}/expense?editId=${expense.id}`)
+                      }}
+                    >수정</button>
+                    {!locked && <button
+                      type="button"
+                      style={{ ...expenseActionStyle, color: COLORS.error, background: '#FFEBEB' }}
+                      onClick={() => {
+                        closeExpenseSheet()
+                        setDeleteTargetId(expense.id)
+                      }}
+                    >삭제</button>}
+                  </div>
+                )}
+              />
+            )
+          })}
+        </List>
+      ),
     })
   }
 
@@ -552,7 +522,7 @@ export default function MeetingDetail() {
       <Top
         title={<Top.TitleParagraph size={22}>{meeting.name}</Top.TitleParagraph>}
         right={
-          uid === meeting?.createdBy || !isSettled ? (
+          !!myId ? (
             <button
               onClick={openManage}
               style={{
@@ -591,9 +561,6 @@ export default function MeetingDetail() {
           />
           <div style={{ position: 'absolute', inset: 0, background: OVERLAY_GRADIENT }} />
           <div style={{ position: 'absolute', bottom: 52, left: 20, right: 20 }}>
-            <p style={{ fontSize: 20, fontWeight: 700, color: '#fff', margin: '0 0 3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {meeting.name}
-            </p>
             <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {meeting.date}{meeting.memo ? ` · ${meeting.memo}` : ''}
             </p>
@@ -614,10 +581,11 @@ export default function MeetingDetail() {
             </button>
           </div>
         </div>
-      ) : meeting.photoUrl ? (
+      ) : photoSrc && photoSrc !== failedPhotoSrc ? (
         <div style={{ position: 'relative', width: '100%', aspectRatio: '1 / 1' }}>
           <img
-            src={cloudinaryThumbnail(meeting.photoUrl, HERO_PHOTO_SIZE)}
+            src={photoSrc}
+            onError={() => setFailedPhotoSrc(photoSrc)}
             alt="대표 사진"
             style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
           />
@@ -628,9 +596,6 @@ export default function MeetingDetail() {
             {isSettled ? '완료' : '진행중'}
           </span>
           <div style={{ position: 'absolute', bottom: 16, left: 20, right: isSettled ? 20 : 110 }}>
-            <p style={{ fontSize: 20, fontWeight: 700, color: '#fff', margin: '0 0 3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {meeting.name}
-            </p>
             <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {meeting.date}{meeting.memo ? ` · ${meeting.memo}` : ''}
             </p>
@@ -665,9 +630,6 @@ export default function MeetingDetail() {
             {isSettled ? '완료' : '진행중'}
           </span>
           <div style={{ position: 'absolute', bottom: 16, left: 20, right: 20 }}>
-            <p style={{ fontSize: 20, fontWeight: 700, color: '#191919', margin: '0 0 3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {meeting.name}
-            </p>
             <p style={{ fontSize: 13, color: '#888', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {meeting.date}{meeting.memo ? ` · ${meeting.memo}` : ''}
             </p>
@@ -712,7 +674,7 @@ export default function MeetingDetail() {
           >
             {visibleMemberEntries.map(([memberUid, name]) => {
               const displayName = truncateName(name)
-              const label = memberUid === uid ? `나(${displayName})` : displayName
+              const label = memberUid === myId ? `나(${displayName})` : displayName
               return (
                 <span
                   key={memberUid}
@@ -800,15 +762,28 @@ export default function MeetingDetail() {
           </div>
           <div style={{ width: 1, background: '#e8e8e8', margin: '4px 0' }} />
           <div style={{ textAlign: 'center' }}>
-            <div style={{ width: 22, height: 22, overflow: 'hidden', position: 'relative', margin: '0 auto 4px' }}>
-              <div style={{ width: 100, height: 100, transform: 'scale(0.22)', transformOrigin: '0 0' }}>
-                <Asset.Icon frameShape={Asset.frameShape.CleanW100} backgroundColor="transparent" name="icon-system-user-two-outlined" color="#3182F6" aria-hidden={true} ratio="1/1" />
-              </div>
+            <div style={{ height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}>
+              <svg
+                width="22"
+                height="22"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="#3182F6"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden={true}
+              >
+                <circle cx="6" cy="8.5" r="2.5" />
+                <circle cx="15" cy="6.75" r="3.25" />
+                <path d="M6 19H3.5A1.5 1.5 0 0 1 2 17.5C2 15 4.25 13 7 13" />
+                <path d="M10 20a2 2 0 0 1-2-2c0-3.1 3.1-5.5 7-5.5s7 2.4 7 5.5a2 2 0 0 1-2 2Z" />
+              </svg>
             </div>
             <p style={{ fontSize: 16, fontWeight: 700, margin: '0 0 2px', color: '#191919' }}>
-              {formatKRW(perPerson)}
+              {formatKRW(myBurden)}
             </p>
-            <p style={{ fontSize: 11, color: '#888', margin: 0 }}>1인당</p>
+            <p style={{ fontSize: 11, color: '#888', margin: 0 }}>{splits ? '내 부담액' : '1인당'}</p>
           </div>
           <div style={{ width: 1, background: '#e8e8e8', margin: '4px 0' }} />
           <div style={{ textAlign: 'center' }}>
@@ -825,24 +800,28 @@ export default function MeetingDetail() {
         </div>
 
         {/* 내 정산 요약 카드 */}
-        {!isSettled && memberEntries.length > 1 && (
-          <div
+        {!isSettled && (
+          <button
+            type="button"
             onClick={() => navigate(`/meetings/${id}/settle`)}
             style={{
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
+              width: '100%',
               padding: '14px 16px',
+              border: 'none',
               borderRadius: 12,
               marginBottom: 24,
               cursor: 'pointer',
+              textAlign: 'left',
               background: '#f7f7f7',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <div>
                 <p style={{ fontSize: 14, fontWeight: 600, margin: '0 0 2px', color: '#191919' }}>
-                  {myBalance !== 0 ? (
+                  {hasIncomingAndOutgoing ? '보낼 돈과 받을 돈이 있어요' : memberEntries.length === 1 && myTransfers.length === 0 ? '내 지출 정산' : myBalance !== 0 ? (
                     <>
                       정산 후{' '}
                       <span style={{ color: myBalance > 0 ? COLORS.primary : COLORS.error }}>
@@ -856,7 +835,7 @@ export default function MeetingDetail() {
               </div>
             </div>
             <span style={{ fontSize: 20, color: '#ccc', lineHeight: 1 }}>›</span>
-          </div>
+          </button>
         )}
 
         {/* 비용 목록 */}
@@ -867,73 +846,21 @@ export default function MeetingDetail() {
             </p>
           ) : (
             <List style={{ margin: '0 -20px', padding: 0, listStyle: 'none' }}>
-              {expenses.map((expense) => {
-                const paidByName = expense.paidBy === uid ? '나' : (members[expense.paidBy] ?? expense.paidBy)
-                const emoji = CATEGORY_EMOJI[expense.category] || '💳'
-                const canEdit = !isSettled && expense.paidBy === uid
+              {groupExpensesByPayer(expenses).map(({ paidBy, total, expenses: payerExpenses }) => {
+                const name = paidBy === myId ? '나' : displayName(paidBy)
                 return (
                   <ListRow
-                    key={expense.id}
+                    key={paidBy}
                     border="indented"
-                    onClick={() => openExpenseDetail(expense)}
+                    onClick={() => openPayerExpenses(name, payerExpenses)}
                     style={{ cursor: 'pointer' }}
-                    left={
-                      <ListRow.AssetText shape="squircle" size="small">
-                        {emoji}
-                      </ListRow.AssetText>
-                    }
-                    contents={
-                      <ListRow.Texts type="1RowTypeA" top={`${paidByName} 납부`} />
-                    }
-                    right={
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span style={{ fontSize: 15, fontWeight: 700, color: '#191919', whiteSpace: 'nowrap' }}>
-                          {formatKRW(expense.amount)}
-                        </span>
-                        {canEdit && (
-                          <>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                navigate(`/meetings/${id}/expense?editId=${expense.id}`)
-                              }}
-                              style={{
-                                padding: '4px 10px',
-                                borderRadius: 20,
-                                border: 'none',
-                                cursor: 'pointer',
-                                fontSize: 12,
-                                fontWeight: 600,
-                                background: '#EBF2FF',
-                                color: '#3182F6',
-                                whiteSpace: 'nowrap',
-                              }}
-                            >
-                              수정
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                setDeleteTargetId(expense.id)
-                              }}
-                              style={{
-                                padding: '4px 10px',
-                                borderRadius: 20,
-                                border: 'none',
-                                cursor: 'pointer',
-                                fontSize: 12,
-                                fontWeight: 600,
-                                background: '#FFEBEB',
-                                color: '#ef4444',
-                                whiteSpace: 'nowrap',
-                              }}
-                            >
-                              삭제
-                            </button>
-                          </>
-                        )}
+                    contents={<ListRow.Texts type="1RowTypeA" top={name} />}
+                    right={(
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap' }}>
+                        <span style={{ fontSize: 15, fontWeight: 700, color: '#191919' }}>{formatKRW(total)} 결제</span>
+                        <span aria-hidden="true" style={{ color: '#8B95A1' }}>›</span>
                       </div>
-                    }
+                    )}
                   />
                 )
               })}
@@ -981,31 +908,13 @@ export default function MeetingDetail() {
       />
 
       <ConfirmDialog
-        open={confirmDeleteMeeting}
-        title="정산방을 삭제할까요?"
-        description="삭제한 정산방과 모든 비용 기록은 복구할 수 없어요."
-        onClose={() => setConfirmDeleteMeeting(false)}
-        confirmButton={
-          <ConfirmDialog.ConfirmButton
-            onClick={() => {
-              setConfirmDeleteMeeting(false)
-              handleDeleteMeeting()
-            }}
-          >
-            삭제
-          </ConfirmDialog.ConfirmButton>
-        }
-        cancelButton={
-          <ConfirmDialog.CancelButton onClick={() => setConfirmDeleteMeeting(false)}>
-            취소
-          </ConfirmDialog.CancelButton>
-        }
-      />
-
-      <ConfirmDialog
         open={confirmLeaveMeeting}
         title="이 모임에서 나갈까요?"
-        description="나가면 다시 초대 링크를 받아야 들어올 수 있어요."
+        description={meeting.memberUids.length === 1
+          ? '마지막 참여자가 나가면 모임, 비용 기록, 대표 사진을 모두 삭제해요.'
+          : isSettled
+            ? '완료된 모임은 나가면 다시 들어올 수 없어요. 정산 기록은 남아요.'
+            : '나가면 다시 초대 링크로 들어올 수 있어요.'}
         onClose={() => setConfirmLeaveMeeting(false)}
         confirmButton={
           <ConfirmDialog.ConfirmButton

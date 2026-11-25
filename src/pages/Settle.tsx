@@ -1,27 +1,26 @@
+import { participantRoomRequest } from '../lib/participantRooms'
 import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { FixedBottomCTA, Top } from '@toss/tds-mobile'
-import { doc, serverTimestamp, writeBatch } from 'firebase/firestore'
-import { db } from '../lib/firebase'
 import { formatKRW } from '../utils/format'
 import { COLORS } from '../styles/tokens'
 import { useMeeting } from '../hooks/useMeeting'
-import { useUserStore } from '../store/userStore'
 import { shareText } from '../lib/bridge'
 import ResultScreen from '../components/ResultScreen'
 import { useSettlementSnapshot } from '../hooks/useSettlementSnapshot'
 import {
-  buildSettlementSnapshot,
+  buildV2SettlementSnapshot,
   hashSettlementSnapshot,
   snapshotToSettlements,
+  settlementParticipantName,
 } from '../utils/settlementSnapshot'
 
 export default function Settle() {
   const { id: meetingId } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { uid } = useUserStore()
-  const { meeting, members, expenses, loading: meetingLoading, error: meetingError } = useMeeting(meetingId)
-  const isMember = !!members[uid]
+  const { meeting, members, expenses, loading: meetingLoading, expensesReady, error: meetingError, participants, access } = useMeeting(meetingId)
+  const myId = access?.participantId ?? ''
+  const isMember = !!members[myId]
   const isSettled = meeting?.status === 'settled'
   const {
     snapshot: storedSnapshot,
@@ -32,30 +31,22 @@ export default function Settle() {
   const [settleSuccess, setSettleSuccess] = useState(false)
   const [settleError, setSettleError] = useState('')
 
-  const liveSnapshot = useMemo(
-    () => buildSettlementSnapshot(
-      meeting?.memberUids ?? Object.keys(members),
-      members,
-      expenses.map((expense) => ({ amount: expense.amount, paidBy: expense.paidBy })),
-    ),
-    [meeting?.memberUids, members, expenses],
-  )
+  const liveSnapshot = useMemo(() =>
+    buildV2SettlementSnapshot(Object.keys(participants ?? {}), expenses),
+  [participants, expenses])
 
-  // 기존 정산 완료 방은 아직 스냅샷이 없으므로 현재의 변경 불가능한 비용·멤버
-  // 데이터로 계산한다. 신규 정산 완료 방부터 저장된 스냅샷을 우선 사용한다.
   const effectiveSnapshot = isSettled && storedSnapshot ? storedSnapshot : liveSnapshot
-  const settlements = useMemo(
-    () => snapshotToSettlements(effectiveSnapshot),
-    [effectiveSnapshot],
-  )
+  const settlements = useMemo(() => snapshotToSettlements(effectiveSnapshot, participants), [effectiveSnapshot, participants])
+  const manualSettlement = (id: string) => !participants?.[id]
   const totalAmount = effectiveSnapshot.totalAmount
   const memberCount = effectiveSnapshot.participantCount
   const perPerson = memberCount > 0 ? Math.floor(totalAmount / memberCount) : 0
+  const burdenTotals = effectiveSnapshot.participantBurdenTotals
 
-  const myPayments = settlements.filter((s) => s.from === uid)
-  const myReceivables = settlements.filter((s) => s.to === uid)
-  const loading = meetingLoading || (isMember && isSettled && snapshotLoading)
-  const error = meetingError || snapshotError
+  const myPayments = settlements.filter((s) => s.from === myId)
+  const myReceivables = settlements.filter((s) => s.to === myId)
+  const loading = meetingLoading || (isMember && !expensesReady) || (isMember && isSettled && snapshotLoading)
+  const error = meetingError || snapshotError || (isMember && isSettled && !snapshotLoading && !storedSnapshot)
 
   async function handleShare() {
     if (!meeting) return
@@ -63,10 +54,12 @@ export default function Settle() {
       `[띵돈] ${meeting.name} 정산 결과`,
       `날짜 : ${meeting.date}`,
       `총 지출 : ${totalAmount.toLocaleString('ko-KR')}원`,
-      `1인당 : ${perPerson.toLocaleString('ko-KR')}원`,
+      ...(burdenTotals
+        ? effectiveSnapshot.participantIds.map((id) => `${settlementParticipantName(effectiveSnapshot, id, participants)} 부담액: ${formatKRW(burdenTotals[id] ?? 0)}`)
+        : [`1인당 : ${perPerson.toLocaleString('ko-KR')}원`]),
       '',
       ...settlements.map(
-        (s) => `${s.fromName} → ${s.toName}: ${s.amount.toLocaleString('ko-KR')}원`,
+        (s) => `${s.fromName} → ${s.toName}: ${s.amount.toLocaleString('ko-KR')}원${manualSettlement(s.from) || manualSettlement(s.to) ? ' · 직접 정산해 주세요' : ''}`,
       ),
     ]
     try {
@@ -77,20 +70,12 @@ export default function Settle() {
   }
 
   async function handleSettle() {
-    if (!meetingId || !uid || !isMember || settling) return
+    if (!meetingId || !isMember || settling) return
     setSettling(true)
     setSettleError('')
     try {
       const hash = await hashSettlementSnapshot(liveSnapshot)
-      const batch = writeBatch(db)
-      batch.set(doc(db, 'meetings', meetingId, 'settlements', 'final'), {
-        ...liveSnapshot,
-        hash,
-        finalizedBy: uid,
-        settledAt: serverTimestamp(),
-      })
-      batch.update(doc(db, 'meetings', meetingId), { status: 'settled' })
-      await batch.commit()
+      await participantRoomRequest(meetingId, 'settle', { hash })
       setSettleSuccess(true)
     } catch {
       setSettleError('정산 완료 처리하지 못했어요. 다시 시도해주세요.')
@@ -166,7 +151,7 @@ export default function Settle() {
     )
   }
 
-  if (!members[uid]) {
+  if (!isMember) {
     return (
       <>
         <Top title={<Top.TitleParagraph size={22}>정산 결과</Top.TitleParagraph>} />
@@ -213,8 +198,8 @@ export default function Settle() {
               <p style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>{formatKRW(totalAmount)}</p>
             </div>
             <div>
-              <p style={{ fontSize: 12, color: '#888', margin: '0 0 2px' }}>1인당</p>
-              <p style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>{formatKRW(perPerson)}</p>
+              <p style={{ fontSize: 12, color: '#888', margin: '0 0 2px' }}>{burdenTotals ? '내 부담액' : '1인당'}</p>
+              <p style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>{formatKRW(burdenTotals ? (burdenTotals[myId] ?? 0) : perPerson)}</p>
             </div>
           </div>
 
@@ -235,7 +220,7 @@ export default function Settle() {
                     borderBottom: '1px solid #f0f0f0',
                   }}
                 >
-                  <span style={{ fontSize: 15, color: '#191919', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 8 }}>나 → {s.toName}</span>
+                  <span style={{ fontSize: 15, color: '#191919', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 8 }}>나 → {s.toName}{manualSettlement(s.to) && <small style={{ display: 'block' }}>직접 정산해 주세요</small>}</span>
                   <span style={{ fontSize: 15, fontWeight: 600, color: COLORS.error, flexShrink: 0, whiteSpace: 'nowrap' }}>
                     {formatKRW(s.amount)}
                   </span>
@@ -261,7 +246,7 @@ export default function Settle() {
                     borderBottom: '1px solid #f0f0f0',
                   }}
                 >
-                  <span style={{ fontSize: 15, color: '#191919', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 8 }}>{s.fromName} → 나</span>
+                  <span style={{ fontSize: 15, color: '#191919', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 8 }}>{s.fromName} → 나{manualSettlement(s.from) && <small style={{ display: 'block' }}>직접 정산해 주세요</small>}</span>
                   <span style={{ fontSize: 15, fontWeight: 600, color: COLORS.primary, flexShrink: 0, whiteSpace: 'nowrap' }}>
                     +{formatKRW(s.amount)}
                   </span>
@@ -272,7 +257,7 @@ export default function Settle() {
 
           {settlements.length === 0 && (
             <p style={{ fontSize: 14, color: '#aaa', textAlign: 'center', padding: '24px 0' }}>
-              모두 정산됐어요!
+              {memberCount === 1 ? '혼자 기록한 모임이라 주고받을 돈이 없어요.' : '주고받을 돈이 없어요.'}
             </p>
           )}
 

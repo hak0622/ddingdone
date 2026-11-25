@@ -1,6 +1,7 @@
-import { getIdToken } from './firebase'
+import { getIdToken, useFirebaseEmulators } from './firebase'
 
 export type WithdrawalMeetingAction =
+  | 'preserve_participant_records'
   | 'leave_active_shared'
   | 'anonymize_settled_shared'
   | 'delete_solo_room'
@@ -51,6 +52,7 @@ export type WithdrawalStatusName =
   | 'queued'
   | 'locking'
   | 'processing'
+  | 'awaiting_reconfirmation'
   | 'finalizing'
   | 'complete'
   | 'preview_stale'
@@ -61,6 +63,8 @@ export interface WithdrawalStatus {
   status: WithdrawalStatusName
   stage: string
   errorCode: string | null
+  scopeRevision?: string
+  scopeMeetingName?: string
   updatedAt: string
 }
 
@@ -82,6 +86,7 @@ export class AccountDeletionError extends Error {
 }
 
 function workerUrl(): string {
+  if (useFirebaseEmulators) return 'http://127.0.0.1:8787'
   const value = import.meta.env.VITE_ACCOUNT_DELETION_WORKER_URL?.trim()
   if (!value) throw new AccountDeletionError('WORKER_NOT_CONFIGURED', 0)
   return value.replace(/\/$/u, '')
@@ -102,12 +107,12 @@ async function authHeaders(): Promise<Record<string, string>> {
   return { Authorization: `Bearer ${idToken}` }
 }
 
-export async function createWithdrawalPreview(): Promise<WithdrawalPreview> {
-  const response = await fetch(`${workerUrl()}/withdrawal/preview`, {
+export async function createWithdrawalPreview(): Promise<WithdrawalPreview | { activeRequestId: string }> {
+  const response = await fetch(`${workerUrl()}/withdrawal/preview?resume=1`, {
     method: 'POST',
     headers: await authHeaders(),
   })
-  return parseResponse<WithdrawalPreview>(response)
+  return parseResponse<WithdrawalPreview | { activeRequestId: string }>(response)
 }
 
 export async function confirmWithdrawal(
@@ -135,7 +140,16 @@ export async function getWithdrawalStatus(
   statusToken: string,
 ): Promise<WithdrawalStatus> {
   const response = await fetch(`${workerUrl()}/withdrawal/status/${encodeURIComponent(requestId)}`, {
-    headers: { 'X-Withdrawal-Status-Token': statusToken },
+    headers: statusToken ? { 'X-Withdrawal-Status-Token': statusToken } : await authHeaders(),
   })
   return parseResponse<WithdrawalStatus>(response)
+}
+
+export async function confirmWithdrawalScope(requestId: string, scopeRevision: string): Promise<void> {
+  const response = await fetch(`${workerUrl()}/withdrawal/confirm`, {
+    method: 'POST',
+    headers: { ...await authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ requestId, scopeRevision }),
+  })
+  await parseResponse<{ accepted: boolean }>(response)
 }
