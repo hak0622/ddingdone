@@ -1,8 +1,10 @@
 import { initializeApp } from 'firebase/app'
-import { getAuth, signInAnonymously as firebaseSignInAnonymously, signOut } from 'firebase/auth'
-import { clearIndexedDbPersistence, initializeFirestore, persistentLocalCache, terminate } from 'firebase/firestore'
+import { connectAuthEmulator, getAuth, signInAnonymously as firebaseSignInAnonymously, signOut } from 'firebase/auth'
+import { clearIndexedDbPersistence, connectFirestoreEmulator, initializeFirestore, persistentLocalCache, terminate } from 'firebase/firestore'
 
-const firebaseConfig = {
+export const useFirebaseEmulators = import.meta.env.DEV && import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true'
+
+const firebaseConfig = useFirebaseEmulators ? { apiKey: 'demo-ddingdone', projectId: 'demo-ddingdone' } : {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
@@ -18,6 +20,10 @@ export const db = initializeFirestore(app, {
 })
 
 const auth = getAuth(app)
+if (useFirebaseEmulators) {
+  connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true })
+  connectFirestoreEmulator(db, '127.0.0.1', 8080)
+}
 
 export async function signInAnonymously(): Promise<string> {
   const credential = await firebaseSignInAnonymously(auth)
