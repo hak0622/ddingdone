@@ -1,23 +1,8 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
     function isAuthenticated() {
       return request.auth != null;
-    }
-
-    // get()은 배치 적용 "전" 상태만 보고, getAfter()는 "후" 상태를 본다.
-    // joinAsNew처럼 멤버 추가와 모임 문서 갱신이 같은 배치로 동시에 일어나는
-    // 경우를 위해 둘 중 하나라도 충족하면 멤버로 인정한다.
-    function isMember(meetingId) {
-      let path = /databases/$(database)/documents/meetings/$(meetingId);
-      return (exists(path) && request.auth.uid in get(path).data.memberUids) ||
-        (existsAfter(path) && request.auth.uid in getAfter(path).data.memberUids);
-    }
-
-    function isSettled(meetingId) {
-      let path = /databases/$(database)/documents/meetings/$(meetingId);
-      return exists(path) && get(path).data.status == 'settled';
     }
 
     function isAccountWriteUnlocked() {
@@ -25,274 +10,69 @@ service cloud.firestore {
         !exists(/databases/$(database)/documents/withdrawalLocks/$(request.auth.uid));
     }
 
-    // 탈퇴 미리보기 manifest에는 내부 UID, 원본 상태 해시, 일회용 확인값의
-    // 해시가 들어간다. Cloudflare Worker의 서비스 계정(Admin REST)만 접근하고
-    // 앱 클라이언트는 본인 문서라고 해도 직접 읽거나 조작할 수 없다.
-    match /withdrawalManifests/{manifestId} {
-      allow read, write: if false;
+    function meetingPath(meetingId) {
+      return /databases/$(database)/documents/meetings/$(meetingId);
     }
 
-    match /withdrawalRequests/{requestId} {
-      allow read, write: if false;
-    }
-
-    match /withdrawalLocks/{uid} {
-      allow read, write: if false;
-    }
-
-    // 단독 방 삭제와 동시에 남기는 사진 정리 대기표다. Worker 서비스 계정만
-    // 접근하며 앱 클라이언트는 조회하거나 위조할 수 없다.
-    match /cloudinaryDeletionJobs/{jobId} {
-      allow read, write: if false;
+    function activeRoomMember(meetingId) {
+      return isAuthenticated() && request.auth.uid in get(meetingPath(meetingId)).data.memberUids;
     }
 
     match /meetings/{meetingId} {
-      function isValidPhotoUpdate() {
-        let changed = request.resource.data.diff(resource.data).affectedKeys();
-        let photoFields = [
-          'photoUrl',
-          'photoPublicId',
-          'photoAssetId',
-          'photoUploadedBy',
-          'photoUploadedAt'
-        ];
-        return !changed.hasAny(photoFields) || (
-          changed.hasAll(['photoUrl', 'photoPublicId', 'photoAssetId', 'photoUploadedAt']) &&
-          request.resource.data.photoUrl is string &&
-          request.resource.data.photoPublicId is string &&
-          request.resource.data.photoPublicId.matches('ddingdone/' + meetingId + '/.*') &&
-          request.resource.data.photoAssetId is string &&
-          request.resource.data.photoUploadedBy == request.auth.uid &&
-          request.resource.data.photoUploadedAt == request.time
-        );
-      }
-
-      function isValidStatusUpdate() {
-        let changed = request.resource.data.diff(resource.data).affectedKeys();
-        let snapshotPath = /databases/$(database)/documents/meetings/$(meetingId)/settlements/final;
-        return !changed.hasAny(['status']) || (
-          resource.data.status == 'active' &&
-          request.resource.data.status == 'settled' &&
-          !exists(snapshotPath) &&
-          existsAfter(snapshotPath)
-        ) || (
-          resource.data.status == 'settled' &&
-          request.resource.data.status == 'active' &&
-          resource.data.createdBy == request.auth.uid &&
-          !existsAfter(snapshotPath)
-        );
-      }
-
-      // 초대 링크로 들어온 비멤버도 "참여하기" 화면을 보려면 ID로 단건 조회는 허용한다.
-      // list(필터 없는 컬렉션 조회)는 본인이 멤버인 문서만 허용해 전체 덤프를 막는다.
-      allow get: if isAuthenticated();
+      allow get: if isAuthenticated() &&
+        (resource == null || request.auth.uid in resource.data.memberUids);
       allow list: if isAuthenticated() && request.auth.uid in resource.data.memberUids;
+      allow update: if isAccountWriteUnlocked() &&
+        request.auth.uid in resource.data.memberUids &&
+        resource.data.participantModelVersion == 2 && resource.data.status == 'active' &&
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'date', 'memo']) ||
+          validPhotoVersionUpdate());
 
-      allow create: if isAccountWriteUnlocked()
-        && request.resource.data.createdBy == request.auth.uid
-        && request.resource.data.memberUids == [request.auth.uid]
-        && !request.resource.data.keys().hasAny(['withdrawalLockRequestId'])
-        && request.resource.data.photoUrl == null
-        && request.resource.data.photoPublicId == null
-        && request.resource.data.photoAssetId == null
-        && request.resource.data.photoUploadedBy == null
-        && request.resource.data.photoUploadedAt == null;
+      function validPhotoVersionUpdate() {
+        let changed = request.resource.data.diff(resource.data).affectedKeys();
+        let cover = /databases/$(database)/documents/meetings/$(meetingId)/photos/cover;
+        return changed.hasAny(['photoVersion']) && changed.hasOnly(['photoVersion']) &&
+          request.resource.data.photoVersion is string &&
+          getAfter(cover).data.version == request.resource.data.photoVersion;
+      }
 
-      // 이미 멤버: 이름/사진/메모/정산 상태/totalAmount 등은 자유롭게 수정 가능하지만
-      // createdBy·memberUids·memberCount는 건드릴 수 없다 — 이 셋은 아래 참여(join)·
-      // 나가기(leave) 두 동작에서만, 그것도 본인 자신의 자리에 대해서만 바뀔 수 있다.
-      // 이 제한이 없으면 일반 멤버가 createdBy를 본인으로 바꿔 방장 권한(통째 삭제
-      // 등)을 탈취하거나, memberUids에서 다른 멤버를 마음대로 빼서 쫓아낼 수 있었다.
-      //
-      // 참여(join): 아직 멤버가 아닌 사람이 정산 전인 방에서 본인만 memberUids에
-      // 추가하고 memberCount를 같이 올린다. hasAll(기존 원소가 결과에 다 남아있는지)
-      // + size()가 정확히 +1인지를 같이 검증해 "정확히 본인 uid 하나만" 추가됐는지까지
-      // 확인한다 — 그냥 uid가 결과에 포함되는지만 보면, 참여하면서 동시에 전혀
-      // 관계없는 다른 uid를 같이 끼워넣어도 통과해버린다.
-      //
-      // 나가기(leave): 이미 멤버인 사람이 정산 전인 방에서 본인만 memberUids에서
-      // 빼고 memberCount를 같이 내린다. 방장은 위임 기능이 없으므로 나가기 대신
-      // 통째 삭제만 가능하다. hasAll(결과 원소가 전부 기존에 있었는지) + size()가
-      // 정확히 -1인지를 같이 검증해 "정확히 본인 uid 하나만" 빠졌는지 확인한다 —
-      // 그냥 본인이 결과에서 빠졌는지만 보면, 나가면서 동시에 다른 멤버까지 같이
-      // 쫓아내도 통과해버린다.
-      allow update: if isAccountWriteUnlocked() && (
-        (
-          request.auth.uid in resource.data.memberUids &&
-          !request.resource.data.diff(resource.data).affectedKeys().hasAny([
-            'createdBy',
-            'memberUids',
-            'memberCount',
-            'withdrawalLockRequestId'
-          ]) &&
-          isValidPhotoUpdate() &&
-          isValidStatusUpdate()
-        ) ||
-        (
-          resource.data.status != 'settled' &&
-          !(request.auth.uid in resource.data.memberUids) &&
-          request.auth.uid in request.resource.data.memberUids &&
-          request.resource.data.memberUids.hasAll(resource.data.memberUids) &&
-          request.resource.data.memberUids.size() == resource.data.memberUids.size() + 1 &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids', 'memberCount']) &&
-          request.resource.data.diff(resource.data).affectedKeys().hasAll(['memberUids', 'memberCount'])
-        ) ||
-        (
-          resource.data.status != 'settled' &&
-          resource.data.createdBy != request.auth.uid &&
-          request.auth.uid in resource.data.memberUids &&
-          !(request.auth.uid in request.resource.data.memberUids) &&
-          resource.data.memberUids.hasAll(request.resource.data.memberUids) &&
-          request.resource.data.memberUids.size() == resource.data.memberUids.size() - 1 &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids', 'memberCount']) &&
-          request.resource.data.diff(resource.data).affectedKeys().hasAll(['memberUids', 'memberCount'])
-        )
-      );
+      match /photos/cover {
+        allow get: if activeRoomMember(meetingId);
+        allow create, update: if isAccountWriteUnlocked() && validCover();
 
-      // 모임 생성자만 통째로 삭제 가능
-      allow delete: if isAccountWriteUnlocked() &&
-        resource.data.createdBy == request.auth.uid;
+        function validCover() {
+          let before = get(meetingPath(meetingId)).data;
+          let after = getAfter(meetingPath(meetingId)).data;
+          let cover = request.resource.data;
+          return request.auth.uid in before.memberUids && before.participantModelVersion == 2 &&
+            before.status == 'active' && cover.keys().hasOnly(['version', 'bytes']) &&
+            cover.version is string && cover.version.matches('[0-9a-f-]{36}') &&
+            after.photoVersion == cover.version && before.get('photoVersion', null) != cover.version &&
+            cover.bytes is bytes && cover.bytes.size() > 0 && cover.bytes.size() <= 204800;
+        }
+      }
 
-      match /members/{memberId} {
-        allow read: if isAuthenticated();
-        // 본인 멤버 문서는 실제로 memberUids에도 들어가 있을 때만 생성/수정 가능.
-        // 이 조건이 없으면 memberUids 갱신 없이 members 문서만 따로 만들어
-        // "가짜 멤버"를 끼워넣어 1인당 정산 금액(perPerson)을 조작할 수 있다 —
-        // perPerson은 memberUids가 아니라 members 서브컬렉션 문서 수로 계산되기 때문.
-        // joinAsNew는 멤버 추가와 같은 배치이므로 isMember의 getAfter 분기로 정상 통과한다.
-        allow create, update: if isAccountWriteUnlocked() &&
-          isMember(meetingId) && memberId == request.auth.uid;
-        // 모임 생성자의 전체 삭제(handleDeleteMeeting), 또는 본인이 나가기
-        // (leaveMeeting)일 때만 허용한다. 본인 삭제는 같은 배치에서 meetings
-        // 문서의 memberUids도 같이 빠지는 경우에만 허용한다 — memberUids는 그대로
-        // 둔 채 본인 members 문서만 단독으로 지우면, isMember() 통과는 유지하면서
-        // (여전히 지출 추가 가능) perPerson 분모(members 문서 수)에서만 빠지는
-        // 식으로 정산 부담을 다른 멤버에게 떠넘길 수 있기 때문이다.
-        allow delete: if isAccountWriteUnlocked() && (
-          get(/databases/$(database)/documents/meetings/$(meetingId)).data.createdBy == request.auth.uid ||
-          (
-            memberId == request.auth.uid &&
-            existsAfter(/databases/$(database)/documents/meetings/$(meetingId)) &&
-            !(request.auth.uid in getAfter(/databases/$(database)/documents/meetings/$(meetingId)).data.memberUids)
-          )
-        );
+      match /participants/{participantId} {
+        allow read: if activeRoomMember(meetingId);
       }
 
       match /expenses/{expenseId} {
-        function meetingBefore() {
-          return get(/databases/$(database)/documents/meetings/$(meetingId)).data;
-        }
-
-        function meetingAfter() {
-          return getAfter(/databases/$(database)/documents/meetings/$(meetingId)).data;
-        }
-
-        function aggregatesMatchCreate() {
-          return meetingAfter().expenseCount == meetingBefore().expenseCount + 1 &&
-            meetingAfter().totalAmount == meetingBefore().totalAmount + request.resource.data.amount;
-        }
-
-        function aggregatesMatchUpdate() {
-          let changed = request.resource.data.diff(resource.data).affectedKeys();
-          return meetingAfter().expenseCount == meetingBefore().expenseCount && (
-            (
-              changed.hasAny(['amount']) &&
-              meetingAfter().totalAmount == meetingBefore().totalAmount +
-                request.resource.data.amount - resource.data.amount
-            ) || (
-              !changed.hasAny(['amount']) &&
-              meetingAfter().totalAmount == meetingBefore().totalAmount
-            )
-          );
-        }
-
-        function aggregatesMatchDelete() {
-          return meetingAfter().expenseCount == meetingBefore().expenseCount - 1 &&
-            meetingAfter().totalAmount == meetingBefore().totalAmount - resource.data.amount;
-        }
-
-        // 비멤버도 참여 전 화면에서 읽기를 시도할 수 있어 읽기는 열어두고, 쓰기만 멤버로 제한
-        allow read: if isAuthenticated();
-
-        // 신규 비용은 결제자와 작성자를 모두 본인 UID로 고정한다. 2026-06-29 운영
-        // 시작 당시 문서에는 createdBy가 없으므로 기존 문서는 그대로 호환하되,
-        // 신규 문서부터 명시적인 작성자를 저장한다.
-        allow create: if isAccountWriteUnlocked() &&
-          isMember(meetingId) && !isSettled(meetingId) &&
-          request.resource.data.paidBy == request.auth.uid &&
-          request.resource.data.createdBy == request.auth.uid &&
-          request.resource.data.createdAt == request.time &&
-          request.resource.data.updatedBy == request.auth.uid &&
+        allow read: if activeRoomMember(meetingId);
+        allow update: if isAccountWriteUnlocked() && activeRoomMember(meetingId) &&
+          get(meetingPath(meetingId)).data.participantModelVersion == 2 &&
+          get(meetingPath(meetingId)).data.status == 'active' &&
+          resource.data.createdBy ==
+            get(/databases/$(database)/documents/meetings/$(meetingId)/participantLinks/$(request.auth.uid)).data.participantId &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memo', 'category', 'updatedAt', 'revision']) &&
+          request.resource.data.memo is string && request.resource.data.memo.size() <= 200 &&
+          request.resource.data.category in ['식비', '카페', '숙소', '교통', '기타'] &&
           request.resource.data.updatedAt == request.time &&
-          request.resource.data.schemaVersion == 2 &&
-          aggregatesMatchCreate();
-
-        // 일반 수정(금액/카테고리 등)은 "내 비용"일 때만, 정산 전에만 허용한다.
-        // paidBy·createdBy·createdAt·schemaVersion은 생성 후 바꿀 수 없다. 기존
-        // 문서에 createdBy가 없더라도 그 필드를 추가하지 않는 수정은 정상 통과한다.
-        allow update: if isAccountWriteUnlocked() &&
-          isMember(meetingId) &&
-          resource.data.paidBy == request.auth.uid &&
-          request.resource.data.paidBy == request.auth.uid &&
-          !request.resource.data.diff(resource.data).affectedKeys()
-            .hasAny(['paidBy', 'createdBy', 'createdAt', 'schemaVersion']) &&
-          request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(['amount', 'category', 'memo', 'updatedBy', 'updatedAt']) &&
-          request.resource.data.updatedBy == request.auth.uid &&
-          request.resource.data.updatedAt == request.time &&
-          !isSettled(meetingId) &&
-          aggregatesMatchUpdate();
-
-        // 일반 삭제는 "내 비용"일 때만(정산 전에만) 허용한다. 모임 전체 삭제에 묶여
-        // 지출도 같이 지워지는 경우는 모임 문서 자체가 이 배치 후 사라지므로 예외로 허용한다.
-        allow delete: if isAccountWriteUnlocked() &&
-          isMember(meetingId) && (
-            !existsAfter(/databases/$(database)/documents/meetings/$(meetingId)) ||
-          (!isSettled(meetingId) && resource.data.paidBy == request.auth.uid && aggregatesMatchDelete())
-        );
+          request.resource.data.revision is string && request.resource.data.revision.size() == 36 &&
+          request.resource.data.revision != resource.data.revision;
       }
 
-      match /settlements/{snapshotId} {
-        allow read: if snapshotId == 'final' && isAuthenticated() && isMember(meetingId);
-
-        // 정산 완료와 같은 원자적 배치에서만 최초 스냅샷을 만들 수 있다. 현재
-        // 방의 총액·인원·UID 순서가 클라이언트가 계산한 값과 다르면 동시 변경이
-        // 있었던 것이므로 배치 전체를 거부하고 다시 계산하게 한다.
-        allow create: if snapshotId == 'final' && isAccountWriteUnlocked() &&
-          isMember(meetingId) &&
-          get(/databases/$(database)/documents/meetings/$(meetingId)).data.status == 'active' &&
-          getAfter(/databases/$(database)/documents/meetings/$(meetingId)).data.status == 'settled' &&
-          request.resource.data.keys().hasOnly([
-            'schemaVersion',
-            'totalAmount',
-            'participantCount',
-            'participantIds',
-            'participantNames',
-            'participantPaidTotals',
-            'transfers',
-            'hash',
-            'finalizedBy',
-            'settledAt'
-          ]) &&
-          request.resource.data.schemaVersion == 1 &&
-          request.resource.data.totalAmount == getAfter(/databases/$(database)/documents/meetings/$(meetingId)).data.totalAmount &&
-          request.resource.data.participantCount == getAfter(/databases/$(database)/documents/meetings/$(meetingId)).data.memberCount &&
-          request.resource.data.participantIds == getAfter(/databases/$(database)/documents/meetings/$(meetingId)).data.memberUids &&
-          request.resource.data.participantNames is map &&
-          request.resource.data.participantPaidTotals is map &&
-          request.resource.data.transfers is list &&
-          request.resource.data.hash is string &&
-          request.resource.data.hash.matches('[0-9a-f]{64}') &&
-          request.resource.data.finalizedBy == request.auth.uid &&
-          request.resource.data.settledAt == request.time;
-
-        allow update: if false;
-
-        // 방장만 정산방을 다시 여는 같은 배치에서 스냅샷을 제거할 수 있다.
-        // 기존 정산 완료 방은 스냅샷이 없으므로 이 삭제 없이도 다시 열 수 있다.
-        allow delete: if snapshotId == 'final' && isAccountWriteUnlocked() &&
-          get(/databases/$(database)/documents/meetings/$(meetingId)).data.createdBy == request.auth.uid &&
-          getAfter(/databases/$(database)/documents/meetings/$(meetingId)).data.status == 'active';
+      match /settlements/final {
+        allow get: if activeRoomMember(meetingId);
       }
     }
   }
