@@ -1,6 +1,10 @@
+import type { ExpenseShare } from './expenseShares'
+
 export type Expense = {
   amount: number
   paidBy: string
+  splitMemberUids?: readonly string[]
+  shares?: readonly ExpenseShare[]
 }
 
 export type Members = Record<string, string>
@@ -32,21 +36,23 @@ export function calculateSettlements(
     balances[uid] = 0
   }
   for (const expense of expenses) {
-    if (balances[expense.paidBy] !== undefined) {
-      balances[expense.paidBy] += expense.amount
+    const balance = balances[expense.paidBy]
+    if (balance !== undefined) {
+      balances[expense.paidBy] = balance + expense.amount
     }
   }
   // 첫 remainder명은 1원 더 부담 → 합계가 정확히 0이 됨
   memberIds.forEach((uid, i) => {
-    balances[uid] -= i < remainder ? baseShare + 1 : baseShare
+    balances[uid] = (balances[uid] ?? 0) - (i < remainder ? baseShare + 1 : baseShare)
   })
 
   const creditors: Array<{ uid: string; amount: number }> = []
   const debtors: Array<{ uid: string; amount: number }> = []
 
   for (const uid of memberIds) {
-    if (balances[uid] > 0) creditors.push({ uid, amount: balances[uid] })
-    else if (balances[uid] < 0) debtors.push({ uid, amount: -balances[uid] })
+    const amount = balances[uid] ?? 0
+    if (amount > 0) creditors.push({ uid, amount })
+    else if (amount < 0) debtors.push({ uid, amount: -amount })
   }
 
   const settlements: Settlement[] = []
@@ -56,14 +62,15 @@ export function calculateSettlements(
   while (ci < creditors.length && di < debtors.length) {
     const creditor = creditors[ci]
     const debtor = debtors[di]
+    if (!debtor || !creditor) break
     const amount = Math.min(creditor.amount, debtor.amount)
 
     if (amount >= 1) {
       settlements.push({
         from: debtor.uid,
-        fromName: members[debtor.uid],
+        fromName: members[debtor.uid] ?? '',
         to: creditor.uid,
-        toName: members[creditor.uid],
+        toName: members[creditor.uid] ?? '',
         amount,
       })
     }
