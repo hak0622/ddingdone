@@ -9,6 +9,7 @@ import type {
 } from './types'
 
 const ACTIONS = new Set([
+  'preserve_participant_records',
   'leave_active_shared',
   'anonymize_settled_shared',
   'delete_solo_room',
@@ -30,6 +31,7 @@ const PREVIEW_ISSUES = new Set<PreviewIssue>([
   'SETTLEMENT_PARTICIPANTS_MISMATCH',
   'UNEXPECTED_SETTLEMENT_SNAPSHOT',
   'UNKNOWN_CHILD_COLLECTION',
+  'EXPENSE_SPLIT_PILOT_MANUAL_REVIEW',
 ])
 
 function isWithdrawalAction(value: unknown): value is WithdrawalMeetingAction {

@@ -1,14 +1,13 @@
+import { cleanupClosedRooms, createRoom, roomOperation, RoomError } from './rooms'
 import { AuthenticationError, createGoogleAccessToken, readBearerToken, verifyFirebaseIdToken } from './auth'
 import { randomNonce, sha256Hex, stableStringify } from './crypto'
-import { deleteCloudinaryMeetingImage } from './cloudinary'
 import {
   claimWithdrawalRequest,
+  commitWrites, updateWrite,
   cleanupExpiredWithdrawalMetadata,
   createWithdrawalManifest,
   FirestoreError,
   getFirestoreDocument,
-  deleteCloudinaryDeletionJob,
-  listPendingCloudinaryDeletionJobs,
   loadMeetingSources,
   markWorkflowCreationFailed,
 } from './firestore'
@@ -108,7 +107,7 @@ async function createPreview(request: Request, env: Env, origin: string | null):
   if (!idToken) return jsonResponse({ error: { code: 'UNAUTHORIZED' } }, 401, origin)
 
   try {
-    const uid = await verifyFirebaseIdToken(idToken, env.FIREBASE_API_KEY)
+    const uid = await verifyFirebaseIdToken(idToken, env.FIREBASE_API_KEY, env.FIREBASE_PROJECT_ID)
     const accessToken = await createGoogleAccessToken(
       env.FIREBASE_CLIENT_EMAIL,
       env.FIREBASE_PRIVATE_KEY,
@@ -119,6 +118,9 @@ async function createPreview(request: Request, env: Env, origin: string | null):
       accessToken,
     )
     if (existingLock) {
+      if (new URL(request.url).searchParams.get('resume') === '1' && typeof existingLock.data.requestId === 'string') {
+        return jsonResponse({ activeRequestId: existingLock.data.requestId }, 200, origin)
+      }
       return jsonResponse({ error: { code: 'WITHDRAWAL_IN_PROGRESS' } }, 409, origin)
     }
     const sources = await loadMeetingSources(env.FIREBASE_PROJECT_ID, uid, accessToken)
@@ -175,8 +177,8 @@ async function confirmWithdrawal(request: Request, env: Env, origin: string | nu
   if (!idToken) return jsonResponse({ error: { code: 'UNAUTHORIZED' } }, 401, origin)
 
   try {
-    const body = parseWithdrawalConfirmBody(await readBoundedJson(request))
-    const uid = await verifyFirebaseIdToken(idToken, env.FIREBASE_API_KEY)
+    const input: unknown = await readBoundedJson(request)
+    const uid = await verifyFirebaseIdToken(idToken, env.FIREBASE_API_KEY, env.FIREBASE_PROJECT_ID)
     const accessToken = await createGoogleAccessToken(
       env.FIREBASE_CLIENT_EMAIL,
       env.FIREBASE_PRIVATE_KEY,
@@ -186,6 +188,40 @@ async function confirmWithdrawal(request: Request, env: Env, origin: string | nu
       `withdrawalLocks/${uid}`,
       accessToken,
     )
+    if (input && typeof input === 'object' && 'scopeRevision' in input && 'requestId' in input) {
+      const { requestId, scopeRevision } = input
+      if (typeof requestId !== 'string' || !/^[0-9a-f-]{36}$/u.test(requestId) ||
+          typeof scopeRevision !== 'string' || !/^[0-9a-f-]{36}$/u.test(scopeRevision) ||
+          existingLock?.data.requestId !== requestId) throw new WithdrawalValidationError('INVALID_REQUEST')
+      const path = `withdrawalRequests/${requestId}`
+      const record = await getFirestoreDocument(env.FIREBASE_PROJECT_ID, path, accessToken)
+      if (!record?.updateTime || record.data.uid !== uid || record.data.scopeRevision !== scopeRevision) {
+        throw new WithdrawalValidationError('PREVIEW_STALE')
+      }
+      if (record.data.status !== 'awaiting_reconfirmation') {
+        if (record.data.status === 'processing' && record.data.approvedScopeRevision === scopeRevision) {
+          return jsonResponse({ accepted: true }, 200, origin)
+        }
+        throw new WithdrawalValidationError('PREVIEW_STALE')
+      }
+      if (record.data.approvedScopeRevision !== scopeRevision) {
+        try {
+          await commitWrites(env.FIREBASE_PROJECT_ID, accessToken, [
+            updateWrite(env.FIREBASE_PROJECT_ID, path, { approvedScopeRevision: scopeRevision },
+              ['approvedScopeRevision'], { updateTime: record.updateTime }),
+          ], 'WITHDRAWAL_CONFIRM_CONFLICT')
+        } catch (error) {
+          const latest = await getFirestoreDocument(env.FIREBASE_PROJECT_ID, path, accessToken)
+          if (latest?.data.uid !== uid || latest.data.approvedScopeRevision !== scopeRevision) throw error
+          if (latest.data.status === 'processing') return jsonResponse({ accepted: true }, 200, origin)
+          if (latest.data.status !== 'awaiting_reconfirmation') throw new WithdrawalValidationError('PREVIEW_STALE')
+        }
+      }
+      const workflow = await env.ACCOUNT_DELETION_WORKFLOW.get(requestId)
+      await workflow.sendEvent({ type: `withdrawal-${scopeRevision}`, payload: {} })
+      return jsonResponse({ accepted: true }, 200, origin)
+    }
+    const body = parseWithdrawalConfirmBody(input)
     if (existingLock) throw new WithdrawalValidationError('WITHDRAWAL_IN_PROGRESS')
     const manifest = await getFirestoreDocument(
       env.FIREBASE_PROJECT_ID,
@@ -267,7 +303,7 @@ async function withdrawalStatus(
     if (!authorized && typeof record.data.uid === 'string') {
       const idToken = readBearerToken(request)
       if (idToken) {
-        const uid = await verifyFirebaseIdToken(idToken, env.FIREBASE_API_KEY)
+        const uid = await verifyFirebaseIdToken(idToken, env.FIREBASE_API_KEY, env.FIREBASE_PROJECT_ID)
         authorized = uid === record.data.uid
       }
     }
@@ -279,58 +315,15 @@ async function withdrawalStatus(
       stage: record.data.stage,
       errorCode: record.data.errorCode ?? null,
       updatedAt: record.data.updatedAt,
+      ...(record.data.status === 'awaiting_reconfirmation' ? {
+        scopeRevision: record.data.scopeRevision, scopeMeetingName: record.data.scopeMeetingName,
+      } : {}),
     }, 200, origin)
   } catch (error) {
     const errorCode = error instanceof AuthenticationError ? 'UNAUTHORIZED' : 'INTERNAL_ERROR'
     logResult(logRequestId, 'error', { stage: 'status', errorCode })
     return jsonResponse({ error: { code: errorCode } }, errorCode === 'UNAUTHORIZED' ? 401 : 500, origin)
   }
-}
-
-async function cleanupPendingCloudinaryImages(env: Env, accessToken: string): Promise<{
-  scannedCount: number
-  deletedCount: number
-  failedCount: number
-}> {
-  const jobs = await listPendingCloudinaryDeletionJobs(
-    env.FIREBASE_PROJECT_ID,
-    accessToken,
-  )
-  let nextIndex = 0
-  let deletedCount = 0
-  let failedCount = 0
-  async function worker(): Promise<void> {
-    while (nextIndex < jobs.length) {
-      const job = jobs[nextIndex]
-      nextIndex += 1
-      if (!job) continue
-      try {
-        await deleteCloudinaryMeetingImage(
-          env.CLOUDINARY_CLOUD_NAME,
-          env.CLOUDINARY_API_KEY,
-          env.CLOUDINARY_API_SECRET,
-          job.meetingId,
-          job.publicId,
-        )
-        await deleteCloudinaryDeletionJob(
-          env.FIREBASE_PROJECT_ID,
-          accessToken,
-          job,
-        )
-        deletedCount += 1
-      } catch (error) {
-        failedCount += 1
-        console.error(JSON.stringify({
-          result: 'error',
-          stage: 'cloudinary-cleanup-job',
-          jobId: job.id,
-          errorCode: error instanceof Error ? error.message : 'INTERNAL_ERROR',
-        }))
-      }
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(2, jobs.length) }, worker))
-  return { scannedCount: jobs.length, deletedCount, failedCount }
 }
 
 export default {
@@ -342,6 +335,33 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: responseHeaders(origin) })
 
     const url = new URL(request.url)
+    const roomMatch = url.pathname.match(/^\/rooms\/([A-Za-z0-9_-]{1,128})\/(access|join|leave|expense|settle)$/u)
+    if (roomMatch || url.pathname === '/rooms') {
+      const [, roomId, action = 'create'] = roomMatch ?? []
+      if (request.method !== (action === 'access' ? 'GET' : 'POST')) {
+        return jsonResponse({ error: { code: 'METHOD_NOT_ALLOWED' } }, 405, origin)
+      }
+      try {
+        const idToken = readBearerToken(request)
+        if (!idToken) throw new RoomError('UNAUTHORIZED', 401)
+        const uid = await verifyFirebaseIdToken(idToken, env.FIREBASE_API_KEY, env.FIREBASE_PROJECT_ID)
+        const body = action === 'access' ? {} : await readBoundedJson(request, 32768)
+        if (!body || typeof body !== 'object' || Array.isArray(body)) throw new RoomError('INVALID_JSON', 400)
+        const token = await createGoogleAccessToken(env.FIREBASE_CLIENT_EMAIL, env.FIREBASE_PRIVATE_KEY)
+        const input = body as Record<string, unknown>
+        const result = action === 'create'
+          ? await createRoom(env.FIREBASE_PROJECT_ID, token, uid, input)
+          : await roomOperation(env.FIREBASE_PROJECT_ID, token, roomId!, uid, action, input)
+        return jsonResponse(result, 200, origin)
+      } catch (error) {
+        if (error instanceof RoomError) return jsonResponse({ error: { code: error.code } }, error.status, origin)
+        if (error instanceof AuthenticationError) return jsonResponse({ error: { code: 'UNAUTHORIZED' } }, 401, origin)
+        if (error instanceof WithdrawalValidationError) return jsonResponse({ error: { code: error.code } }, 400, origin)
+        if (error instanceof FirestoreError && error.code === 'ROOM_CHANGED') return jsonResponse({ error: { code: error.code } }, 409, origin)
+        console.error(JSON.stringify({ event: 'room-operation-failed', action, code: error instanceof FirestoreError ? error.code : 'INTERNAL_ERROR' }))
+        return jsonResponse({ error: { code: 'INTERNAL_ERROR' } }, 500, origin)
+      }
+    }
     const statusMatch = url.pathname.match(/^\/withdrawal\/status\/([0-9a-f-]{36})$/u)
     if (statusMatch?.[1]) {
       if (request.method !== 'GET') {
@@ -368,20 +388,20 @@ export default {
         env.FIREBASE_CLIENT_EMAIL,
         env.FIREBASE_PRIVATE_KEY,
       )
-      const [metadata, cloudinary] = await Promise.all([
+      const [metadata, closedRooms] = await Promise.all([
         cleanupExpiredWithdrawalMetadata(
           env.FIREBASE_PROJECT_ID,
           accessToken,
           new Date(controller.scheduledTime),
         ),
-        cleanupPendingCloudinaryImages(env, accessToken),
+        cleanupClosedRooms(env.FIREBASE_PROJECT_ID, accessToken),
       ])
       console.log(JSON.stringify({
         cleanupId,
         result: 'success',
         stage: 'cleanup',
         metadata,
-        cloudinary,
+        closedRooms,
       }))
     } catch (error) {
       const errorCode = error instanceof FirestoreError ? error.code : 'INTERNAL_ERROR'

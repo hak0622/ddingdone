@@ -6,9 +6,9 @@ interface __BaseEnv_Env {
 	FIREBASE_API_KEY: string;
 	FIREBASE_CLIENT_EMAIL: string;
 	FIREBASE_PRIVATE_KEY: string;
-	CLOUDINARY_CLOUD_NAME: string;
-	CLOUDINARY_API_KEY: string;
-	CLOUDINARY_API_SECRET: string;
+
+
+
 	ACCOUNT_DELETION_WORKFLOW: Workflow<Parameters<import("./src/index").AccountDeletionWorkflow['run']>[0]['payload']>;
 }
 declare namespace Cloudflare {
@@ -22,7 +22,7 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "FIREBASE_PROJECT_ID" | "FIREBASE_API_KEY" | "FIREBASE_CLIENT_EMAIL" | "FIREBASE_PRIVATE_KEY" | "CLOUDINARY_CLOUD_NAME" | "CLOUDINARY_API_KEY" | "CLOUDINARY_API_SECRET">> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "FIREBASE_PROJECT_ID" | "FIREBASE_API_KEY" | "FIREBASE_CLIENT_EMAIL" | "FIREBASE_PRIVATE_KEY">> {}
 }
 
 // Begin runtime types

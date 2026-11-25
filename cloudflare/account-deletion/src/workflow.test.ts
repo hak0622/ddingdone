@@ -25,7 +25,7 @@ describe('anonymizeSettlementSnapshot', () => {
     const anonymousId = (result.participantIds as string[])[0]
     expect(anonymousId).toMatch(/^withdrawn_[0-9a-f]{24}$/u)
     expect(stableStringify(result)).not.toContain('user-1')
-    expect(result.participantNames).toMatchObject({ [anonymousId]: '탈퇴한 사용자' })
+    expect(result.participantNames).toMatchObject({ [anonymousId]: '알 수 없음' })
     expect(result.finalizedBy).toBe(anonymousId)
 
     const core = {

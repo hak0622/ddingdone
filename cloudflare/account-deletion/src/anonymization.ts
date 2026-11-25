@@ -36,7 +36,7 @@ export async function anonymizeSettlementSnapshot(
   const nextIds = participantIds.map((participantUid) => participantUid === uid ? anonymousId : participantUid)
   const nextNames = { ...participantNames }
   const nextPaidTotals = { ...participantPaidTotals }
-  nextNames[anonymousId] = '탈퇴한 사용자'
+  nextNames[anonymousId] = '알 수 없음'
   nextPaidTotals[anonymousId] = nextPaidTotals[uid]
   delete nextNames[uid]
   delete nextPaidTotals[uid]

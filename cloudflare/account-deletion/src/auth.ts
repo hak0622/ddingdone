@@ -1,6 +1,8 @@
 import { base64UrlBytes, base64UrlJson } from './crypto'
 
 const FIREBASE_LOOKUP_URL = 'https://identitytoolkit.googleapis.com/v1/accounts:lookup'
+const EMULATOR_PROJECT = 'demo-ddingdone'
+const AUTH_EMULATOR = 'http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1'
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const GOOGLE_TOKEN_AUDIENCE = GOOGLE_TOKEN_URL
 const GOOGLE_CLOUD_SCOPE = 'https://www.googleapis.com/auth/cloud-platform'
@@ -30,8 +32,9 @@ export function readBearerToken(request: Request): string | null {
   return token && !token.includes(' ') ? token : null
 }
 
-export async function verifyFirebaseIdToken(idToken: string, apiKey: string): Promise<string> {
-  const response = await fetch(`${FIREBASE_LOOKUP_URL}?key=${encodeURIComponent(apiKey)}`, {
+export async function verifyFirebaseIdToken(idToken: string, apiKey: string, projectId?: string): Promise<string> {
+  const lookup = projectId === EMULATOR_PROJECT ? `${AUTH_EMULATOR}/accounts:lookup` : FIREBASE_LOOKUP_URL
+  const response = await fetch(`${lookup}?key=${encodeURIComponent(apiKey)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ idToken }),
@@ -67,6 +70,7 @@ export async function createGoogleAccessToken(
   privateKey: string,
   nowSeconds = Math.floor(Date.now() / 1000),
 ): Promise<string> {
+  if (clientEmail === EMULATOR_PROJECT && privateKey === EMULATOR_PROJECT) return 'owner'
   const header = base64UrlJson({ alg: 'RS256', typ: 'JWT' })
   const claims = base64UrlJson({
     iss: clientEmail,
@@ -111,8 +115,9 @@ export async function deleteFirebaseUser(
   uid: string,
   accessToken: string,
 ): Promise<void> {
+  const api = projectId === EMULATOR_PROJECT ? AUTH_EMULATOR : 'https://identitytoolkit.googleapis.com/v1'
   const response = await fetch(
-    `https://identitytoolkit.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/accounts:delete`,
+    `${api}/projects/${encodeURIComponent(projectId)}/accounts:delete`,
     {
       method: 'POST',
       headers: {

@@ -6,17 +6,12 @@ import type {
 } from './types'
 
 const MAX_MEETINGS = 100
-const MAX_MEMBERS_PER_MEETING = 500
-// 탈퇴자 비용 삭제, 멤버 삭제, 방 갱신, 정산 스냅샷 갱신을 Firestore의
-// 단일 500-write 커밋으로 처리하기 위한 보수적인 상한이다.
-const MAX_EXPENSES_PER_MEETING = 450
-const MAX_SETTLEMENT_DOCUMENTS = 10
 const MAX_CHILD_COLLECTIONS = 100
 const PAGE_SIZE = 300
-const MAX_ATOMIC_WRITES = 500
 const MAX_CLEANUP_DOCUMENTS_PER_COLLECTION = 240
-const MAX_CLOUDINARY_CLEANUP_JOBS = 50
-const FIRESTORE_API = 'https://firestore.googleapis.com/v1'
+function firestoreApi(projectId: string) {
+  return projectId === 'demo-ddingdone' ? 'http://127.0.0.1:8080/v1' : 'https://firestore.googleapis.com/v1'
+}
 const EXTERNAL_REQUEST_TIMEOUT_MS = 10_000
 
 type FirestoreValue = {
@@ -42,7 +37,7 @@ interface FirestoreDocument {
 
 type FirestorePrecondition = { exists: boolean } | { updateTime: string }
 
-type FirestoreWrite = {
+export type FirestoreWrite = {
   update?: FirestoreDocument
   updateMask?: { fieldPaths: string[] }
   currentDocument?: FirestorePrecondition
@@ -57,7 +52,7 @@ export class FirestoreError extends Error {
 }
 
 function documentBase(projectId: string): string {
-  return `${FIRESTORE_API}/projects/${encodeURIComponent(projectId)}/databases/(default)/documents`
+  return `${firestoreApi(projectId)}/projects/${encodeURIComponent(projectId)}/databases/(default)/documents`
 }
 
 function documentName(projectId: string, documentPath: string): string {
@@ -139,7 +134,7 @@ function encodeFields(data: Record<string, unknown>): Record<string, FirestoreVa
   return fields
 }
 
-function updateWrite(
+export function updateWrite(
   projectId: string,
   documentPath: string,
   data: Record<string, unknown>,
@@ -153,7 +148,7 @@ function updateWrite(
   }
 }
 
-function deleteWrite(
+export function deleteWrite(
   projectId: string,
   documentPath: string,
   currentDocument?: FirestorePrecondition,
@@ -164,7 +159,7 @@ function deleteWrite(
   }
 }
 
-async function commitWrites(
+export async function commitWrites(
   projectId: string,
   accessToken: string,
   writes: FirestoreWrite[],
@@ -173,7 +168,7 @@ async function commitWrites(
 ): Promise<void> {
   if (writes.length === 0 && !transaction) return
   const response = await fetch(
-    `${FIRESTORE_API}/projects/${encodeURIComponent(projectId)}/databases/(default)/documents:commit`,
+    `${firestoreApi(projectId)}/projects/${encodeURIComponent(projectId)}/databases/(default)/documents:commit`,
     {
       method: 'POST',
       headers: { ...authorization(accessToken), 'Content-Type': 'application/json' },
@@ -181,7 +176,10 @@ async function commitWrites(
       signal: requestSignal(),
     },
   )
-  if (!response.ok) throw new FirestoreError(errorCode)
+  if (!response.ok) {
+    await response.body?.cancel()
+    throw new FirestoreError(response.status === 409 && errorCode === 'ROOM_COMMIT_FAILED' ? 'ROOM_CHANGED' : errorCode)
+  }
   await response.body?.cancel()
 }
 
@@ -190,7 +188,7 @@ export async function beginFirestoreTransaction(
   accessToken: string,
 ): Promise<string> {
   const response = await fetch(
-    `${FIRESTORE_API}/projects/${encodeURIComponent(projectId)}/databases/(default)/documents:beginTransaction`,
+    `${firestoreApi(projectId)}/projects/${encodeURIComponent(projectId)}/databases/(default)/documents:beginTransaction`,
     {
       method: 'POST',
       headers: { ...authorization(accessToken), 'Content-Type': 'application/json' },
@@ -214,7 +212,7 @@ export async function rollbackFirestoreTransaction(
   transaction: string,
 ): Promise<void> {
   const response = await fetch(
-    `${FIRESTORE_API}/projects/${encodeURIComponent(projectId)}/databases/(default)/documents:rollback`,
+    `${firestoreApi(projectId)}/projects/${encodeURIComponent(projectId)}/databases/(default)/documents:rollback`,
     {
       method: 'POST',
       headers: { ...authorization(accessToken), 'Content-Type': 'application/json' },
@@ -309,13 +307,6 @@ export interface WithdrawalCleanupResult {
   skippedRequestCount: number
 }
 
-export interface CloudinaryDeletionJob {
-  id: string
-  meetingId: string
-  publicId: string
-  updateTime: string
-}
-
 export async function cleanupExpiredWithdrawalMetadata(
   projectId: string,
   accessToken: string,
@@ -354,53 +345,6 @@ export async function cleanupExpiredWithdrawalMetadata(
   }
 }
 
-export function cloudinaryDeletionJobId(requestId: string, meetingId: string): string {
-  if (!/^[0-9a-f-]{36}$/u.test(requestId) || !/^[A-Za-z0-9_-]{1,128}$/u.test(meetingId)) {
-    throw new FirestoreError('INVALID_CLOUDINARY_CLEANUP_JOB')
-  }
-  return `${requestId}_${meetingId}`
-}
-
-export async function listPendingCloudinaryDeletionJobs(
-  projectId: string,
-  accessToken: string,
-): Promise<CloudinaryDeletionJob[]> {
-  const response = await fetch(`${documentBase(projectId)}:runQuery`, {
-    method: 'POST',
-    headers: { ...authorization(accessToken), 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      structuredQuery: {
-        from: [{ collectionId: 'cloudinaryDeletionJobs' }],
-        limit: MAX_CLOUDINARY_CLEANUP_JOBS,
-      },
-    }),
-    signal: requestSignal(),
-  })
-  const records = asRunQueryDocuments(await readJson(response, 'CLOUDINARY_CLEANUP_QUERY_FAILED'))
-  return records.flatMap((record) => {
-    const meetingId = record.data.meetingId
-    const publicId = record.data.publicId
-    if (
-      !record.updateTime || typeof meetingId !== 'string' || typeof publicId !== 'string' ||
-      record.data.status !== 'pending' || !/^[A-Za-z0-9_-]{1,128}$/u.test(meetingId) ||
-      !publicId.startsWith(`ddingdone/${meetingId}/`)
-    ) return []
-    return [{ id: record.id, meetingId, publicId, updateTime: record.updateTime }]
-  })
-}
-
-export async function deleteCloudinaryDeletionJob(
-  projectId: string,
-  accessToken: string,
-  job: CloudinaryDeletionJob,
-): Promise<void> {
-  await commitWrites(projectId, accessToken, [deleteWrite(
-    projectId,
-    `cloudinaryDeletionJobs/${encodeURIComponent(job.id)}`,
-    { updateTime: job.updateTime },
-  )], 'CLOUDINARY_CLEANUP_JOB_DELETE_FAILED')
-}
-
 async function queryMeetings(
   projectId: string,
   uid: string,
@@ -429,33 +373,39 @@ async function queryMeetings(
   return documents.sort((left, right) => left.id.localeCompare(right.id))
 }
 
-async function listDocuments(
-  projectId: string,
-  parentPath: string,
-  collectionId: string,
-  accessToken: string,
-  maximumDocuments: number,
-  transaction?: string,
+export async function queryRoomRecords(
+  projectId: string, accessToken: string, collectionId: string,
+  fieldPath: string, value: string | boolean, allDescendants = false,
 ): Promise<FirestoreRecord[]> {
-  const documents: FirestoreRecord[] = []
-  let pageToken: string | undefined
-  do {
-    const url = new URL(`${documentBase(projectId)}/${parentPath}/${collectionId}`)
-    url.searchParams.set('pageSize', String(PAGE_SIZE))
-    if (pageToken) url.searchParams.set('pageToken', pageToken)
-    if (transaction) url.searchParams.set('transaction', transaction)
-    const response = await fetch(url, {
-      headers: authorization(accessToken),
-      signal: requestSignal(),
-    })
-    const json = await readJson(response, 'SUBCOLLECTION_QUERY_FAILED')
-    if (!json || typeof json !== 'object') throw new FirestoreError('INVALID_LIST_RESPONSE')
-    const body = json as { documents?: FirestoreDocument[]; nextPageToken?: unknown }
-    for (const document of body.documents ?? []) documents.push(decodeDocument(document))
-    if (documents.length > maximumDocuments) throw new FirestoreError('DOCUMENT_LIMIT_EXCEEDED')
-    pageToken = typeof body.nextPageToken === 'string' ? body.nextPageToken : undefined
-  } while (pageToken)
-  return documents
+  const response = await fetch(`${documentBase(projectId)}:runQuery`, {
+    method: 'POST',
+    headers: { ...authorization(accessToken), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ structuredQuery: {
+      from: [{ collectionId, allDescendants }],
+      where: { fieldFilter: { field: { fieldPath }, op: 'EQUAL', value: encodeValue(value) } },
+      limit: MAX_MEETINGS + 1,
+    } }),
+    signal: requestSignal(),
+  })
+  const records = asRunQueryDocuments(await readJson(response, 'ROOM_QUERY_FAILED'))
+  if (records.length > MAX_MEETINGS) throw new FirestoreError('MEETING_LIMIT_EXCEEDED')
+  return records
+}
+
+export async function readRoomCollection(
+  projectId: string, accessToken: string, parentPath: string, collectionId: string,
+  transaction: string, limit: number, namesOnly = false,
+): Promise<FirestoreRecord[]> {
+  const response = await fetch(`${documentBase(projectId)}/${parentPath}:runQuery`, {
+    method: 'POST',
+    headers: { ...authorization(accessToken), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ transaction, structuredQuery: {
+      from: [{ collectionId }], limit,
+      ...(namesOnly ? { select: { fields: [{ fieldPath: '__name__' }] } } : {}),
+    } }),
+    signal: requestSignal(),
+  })
+  return asRunQueryDocuments(await readJson(response, 'ROOM_COLLECTION_QUERY_FAILED'))
 }
 
 async function getDocument(
@@ -485,7 +435,32 @@ export async function getFirestoreDocument(
   return getDocument(projectId, documentPath, accessToken, transaction)
 }
 
-async function listChildCollectionIds(
+export async function batchGetRoomDocuments(
+  projectId: string, paths: string[], accessToken: string, transaction: string,
+): Promise<Array<FirestoreRecord | null>> {
+  if (!paths.length) return []
+  const names = paths.map((path) => documentName(projectId, path))
+  const response = await fetch(`${documentBase(projectId)}:batchGet`, {
+    method: 'POST',
+    headers: { ...authorization(accessToken), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ documents: names, transaction }),
+    signal: requestSignal(),
+  })
+  const rows = await readJson(response, 'ROOM_DOCUMENT_QUERY_FAILED')
+  if (!Array.isArray(rows)) throw new FirestoreError('INVALID_DOCUMENT_RESPONSE')
+  const found = new Map<string, FirestoreRecord | null>()
+  for (const row of rows as Array<{ found?: FirestoreDocument; missing?: string }>) {
+    if (row.found?.name) found.set(row.found.name, decodeDocument(row.found))
+    else if (row.missing) found.set(row.missing, null)
+  }
+  return names.map((name) => {
+    const result = found.get(name)
+    if (result === undefined) throw new FirestoreError('INVALID_DOCUMENT_RESPONSE')
+    return result
+  })
+}
+
+export async function listChildCollectionIds(
   projectId: string,
   documentPath: string,
   accessToken: string,
@@ -536,8 +511,11 @@ export async function loadMeetingSources(
   accessToken: string,
 ): Promise<MeetingSource[]> {
   const meetings = await queryMeetings(projectId, uid, accessToken)
-  return mapWithConcurrency(meetings, 5, (meeting) =>
-    loadMeetingSource(projectId, meeting.id, accessToken, meeting))
+  return mapWithConcurrency(meetings, 5, async (meeting) => {
+    if (meeting.data.participantModelVersion !== 2) throw new FirestoreError('ROOM_VERSION_NOT_SUPPORTED')
+    const childCollectionIds = await listChildCollectionIds(projectId, `meetings/${encodeURIComponent(meeting.id)}`, accessToken)
+    return { meeting, members: [], expenses: [], settlement: null, settlementDocuments: [], childCollectionIds }
+  })
 }
 
 export async function listMeetingIdsForUser(
@@ -546,41 +524,6 @@ export async function listMeetingIdsForUser(
   accessToken: string,
 ): Promise<string[]> {
   return (await queryMeetings(projectId, uid, accessToken)).map((meeting) => meeting.id)
-}
-
-export async function loadMeetingSource(
-  projectId: string,
-  meetingId: string,
-  accessToken: string,
-  knownMeeting?: FirestoreRecord,
-  transaction?: string,
-  options: {
-    includeSettlementDocuments?: boolean
-    includeChildCollectionIds?: boolean
-  } = {},
-): Promise<MeetingSource> {
-  const meeting = knownMeeting ?? await getDocument(
-    projectId,
-    `meetings/${encodeURIComponent(meetingId)}`,
-    accessToken,
-    transaction,
-  )
-  if (!meeting) throw new FirestoreError('MEETING_NOT_FOUND')
-  const parentPath = `meetings/${encodeURIComponent(meeting.id)}`
-  const includeSettlementDocuments = options.includeSettlementDocuments ?? true
-  const includeChildCollectionIds = options.includeChildCollectionIds ?? true
-  const [members, expenses, settlementDocuments, childCollectionIds] = await Promise.all([
-    listDocuments(projectId, parentPath, 'members', accessToken, MAX_MEMBERS_PER_MEETING, transaction),
-    listDocuments(projectId, parentPath, 'expenses', accessToken, MAX_EXPENSES_PER_MEETING, transaction),
-    includeSettlementDocuments
-      ? listDocuments(projectId, parentPath, 'settlements', accessToken, MAX_SETTLEMENT_DOCUMENTS, transaction)
-      : Promise.resolve([]),
-    includeChildCollectionIds
-      ? listChildCollectionIds(projectId, parentPath, accessToken)
-      : Promise.resolve([]),
-  ])
-  const settlement = settlementDocuments.find((document) => document.id === 'final') ?? null
-  return { meeting, members, expenses, settlement, settlementDocuments, childCollectionIds }
 }
 
 export async function createWithdrawalManifest(
@@ -772,194 +715,12 @@ export async function markWorkflowCreationFailed(
   ], 'MANIFEST_RESET_FAILED')
 }
 
-function expenseAuthor(expense: FirestoreRecord): string | null {
-  const createdBy = expense.data.createdBy
-  if (typeof createdBy === 'string') return createdBy
-  return typeof expense.data.paidBy === 'string' ? expense.data.paidBy : null
-}
-
-export async function processSharedMemberDeparture(
-  projectId: string,
-  accessToken: string,
-  uid: string,
-  source: MeetingSource,
-  anonymizedSnapshot: Record<string, unknown> | null,
-  successorUid: string | null,
-  transaction?: string,
-): Promise<{ deletedExpenseCount: number }> {
-  const meetingId = source.meeting.id
-  const memberUids = Array.isArray(source.meeting.data.memberUids)
-    ? source.meeting.data.memberUids.filter((value): value is string => typeof value === 'string')
-    : []
-  const alreadyProcessed = !memberUids.includes(uid)
-  if (alreadyProcessed) {
-    await commitWrites(projectId, accessToken, [], 'MEETING_DEPARTURE_FAILED', transaction)
-    return { deletedExpenseCount: 0 }
-  }
-
-  const ownedExpenses = source.expenses.filter((expense) => expenseAuthor(expense) === uid)
-  const remainingExpenses = source.expenses.filter((expense) => expenseAuthor(expense) !== uid)
-  const status = source.meeting.data.status === 'settled' ? 'settled' : 'active'
-  const totalAmount = status === 'settled'
-    ? source.meeting.data.totalAmount
-    : remainingExpenses.reduce((sum, expense) => {
-        const amount = expense.data.amount
-        return sum + (typeof amount === 'number' && Number.isFinite(amount) ? amount : 0)
-      }, 0)
-  const remainingMemberUids = memberUids.filter((memberUid) => memberUid !== uid)
-  const isOwner = source.meeting.data.createdBy === uid
-  if (
-    (isOwner && (!successorUid || !remainingMemberUids.includes(successorUid))) ||
-    (!isOwner && successorUid !== null)
-  ) throw new FirestoreError('INVALID_SUCCESSOR')
-  const meetingData: Record<string, unknown> = {
-    memberUids: remainingMemberUids,
-    memberCount: remainingMemberUids.length,
-    expenseCount: remainingExpenses.length,
-    totalAmount,
-  }
-  const meetingFields = [
-    'memberUids',
-    'memberCount',
-    'expenseCount',
-    'totalAmount',
-  ]
-  if (isOwner) {
-    meetingData.createdBy = successorUid
-    meetingFields.push('createdBy')
-  }
-  if (source.meeting.data.photoUploadedBy === uid) {
-    meetingData.photoUploadedBy = null
-    meetingFields.push('photoUploadedBy')
-  }
-  const member = source.members.find((candidate) => candidate.id === uid)
-  if (!member) throw new FirestoreError('MEMBER_NOT_FOUND')
-  const writes: FirestoreWrite[] = [
-    ...ownedExpenses.map((expense) => deleteWrite(
-      projectId,
-      `meetings/${meetingId}/expenses/${expense.id}`,
-      expense.updateTime ? { updateTime: expense.updateTime } : { exists: true },
-    )),
-    deleteWrite(
-      projectId,
-      `meetings/${meetingId}/members/${uid}`,
-      member.updateTime ? { updateTime: member.updateTime } : { exists: true },
-    ),
-    updateWrite(
-      projectId,
-      `meetings/${meetingId}`,
-      meetingData,
-      meetingFields,
-      source.meeting.updateTime ? { updateTime: source.meeting.updateTime } : { exists: true },
-    ),
-  ]
-  if (status === 'settled') {
-    if (!anonymizedSnapshot) throw new FirestoreError('ANONYMIZED_SNAPSHOT_REQUIRED')
-    writes.push(updateWrite(
-      projectId,
-      `meetings/${meetingId}/settlements/final`,
-      anonymizedSnapshot,
-      Object.keys(anonymizedSnapshot),
-      source.settlement?.updateTime ? { updateTime: source.settlement.updateTime } : { exists: true },
-    ))
-  }
-  await commitWrites(
-    projectId,
-    accessToken,
-    writes,
-    'MEETING_DEPARTURE_FAILED',
-    transaction,
-  )
-  return { deletedExpenseCount: ownedExpenses.length }
-}
-
-export async function deleteSoloMeeting(
-  projectId: string,
-  accessToken: string,
-  uid: string,
-  source: MeetingSource,
-  transaction?: string,
-  cloudinaryCleanup?: { requestId: string; publicId: string } | null,
-): Promise<{ deletedExpenseCount: number }> {
-  const meetingId = source.meeting.id
-  const memberUids = Array.isArray(source.meeting.data.memberUids)
-    ? source.meeting.data.memberUids.filter((value): value is string => typeof value === 'string')
-    : []
-  const safeSettlement = source.settlementDocuments.length === 0 || (
-    source.settlementDocuments.length === 1 &&
-    source.settlementDocuments[0]?.id === 'final' &&
-    Array.isArray(source.settlement?.data.participantIds) &&
-    source.settlement.data.participantIds.length === 1 &&
-    source.settlement.data.participantIds[0] === uid
-  )
-  if (
-    source.meeting.data.createdBy !== uid ||
-    memberUids.length !== 1 || memberUids[0] !== uid ||
-    source.members.length !== 1 || source.members[0]?.id !== uid ||
-    source.expenses.some((expense) =>
-      expenseAuthor(expense) !== uid || expense.data.paidBy !== uid) ||
-    source.childCollectionIds.some((id) => !['expenses', 'members', 'settlements'].includes(id)) ||
-    !safeSettlement
-  ) throw new FirestoreError('SOLO_MEETING_NOT_SAFE_TO_DELETE')
-  if (
-    cloudinaryCleanup &&
-    !cloudinaryCleanup.publicId.startsWith(`ddingdone/${meetingId}/`)
-  ) throw new FirestoreError('INVALID_CLOUDINARY_CLEANUP_JOB')
-
-  const writes: FirestoreWrite[] = [
-    ...(cloudinaryCleanup ? [updateWrite(
-      projectId,
-      `cloudinaryDeletionJobs/${cloudinaryDeletionJobId(cloudinaryCleanup.requestId, meetingId)}`,
-      {
-        requestId: cloudinaryCleanup.requestId,
-        meetingId,
-        publicId: cloudinaryCleanup.publicId,
-        status: 'pending',
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
-      ['requestId', 'meetingId', 'publicId', 'status', 'createdAt', 'updatedAt'],
-      { exists: false },
-    )] : []),
-    ...source.expenses.map((expense) => deleteWrite(
-      projectId,
-      `meetings/${meetingId}/expenses/${expense.id}`,
-      expense.updateTime ? { updateTime: expense.updateTime } : { exists: true },
-    )),
-    ...source.members.map((member) => deleteWrite(
-      projectId,
-      `meetings/${meetingId}/members/${member.id}`,
-      member.updateTime ? { updateTime: member.updateTime } : { exists: true },
-    )),
-    ...source.settlementDocuments.map((settlement) => deleteWrite(
-      projectId,
-      `meetings/${meetingId}/settlements/${settlement.id}`,
-      settlement.updateTime ? { updateTime: settlement.updateTime } : { exists: true },
-    )),
-    deleteWrite(
-      projectId,
-      `meetings/${meetingId}`,
-      source.meeting.updateTime ? { updateTime: source.meeting.updateTime } : { exists: true },
-    ),
-  ]
-  if (writes.length > MAX_ATOMIC_WRITES) throw new FirestoreError('DOCUMENT_LIMIT_EXCEEDED')
-  await commitWrites(
-    projectId,
-    accessToken,
-    writes,
-    'SOLO_MEETING_DELETE_FAILED',
-    transaction,
-  )
-  return { deletedExpenseCount: source.expenses.length }
-}
-
 export async function finalizeWithdrawalMetadata(
   projectId: string,
   accessToken: string,
   uid: string,
   requestId: string,
   manifestId: string,
-  cloudinaryCleanupJobIds: string[] = [],
 ): Promise<void> {
   const now = new Date()
   await commitWrites(projectId, accessToken, [
@@ -972,13 +733,10 @@ export async function finalizeWithdrawalMetadata(
       completedAt: now,
     }, [
       'uid', 'manifestId', 'manifestHash', 'sourceHash', 'preview', 'successorByMeeting',
-      'status', 'stage', 'updatedAt', 'completedAt',
+      'status', 'stage', 'updatedAt', 'completedAt', 'scopeMeetingId', 'scopeMeetingName',
+      'scopeRevision', 'approvedScopeRevision',
     ], { exists: true }),
     deleteWrite(projectId, `withdrawalManifests/${manifestId}`),
     deleteWrite(projectId, `withdrawalLocks/${uid}`),
-    ...cloudinaryCleanupJobIds.map((jobId) => deleteWrite(
-      projectId,
-      `cloudinaryDeletionJobs/${encodeURIComponent(jobId)}`,
-    )),
   ], 'WITHDRAWAL_FINALIZE_FAILED')
 }

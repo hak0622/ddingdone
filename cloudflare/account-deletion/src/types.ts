@@ -19,12 +19,14 @@ export interface MeetingSource {
 }
 
 export type WithdrawalMeetingAction =
+  | 'preserve_participant_records'
   | 'leave_active_shared'
   | 'anonymize_settled_shared'
   | 'delete_solo_room'
   | 'manual_review'
 
 export type PreviewIssue =
+  | 'EXPENSE_SPLIT_PILOT_MANUAL_REVIEW'
   | 'CREATOR_NOT_MEMBER'
   | 'EXPENSE_DATA_INVALID'
   | 'EXPENSE_OWNER_UNKNOWN'
@@ -102,6 +104,7 @@ export type WithdrawalRequestStatus =
   | 'queued'
   | 'locking'
   | 'processing'
+  | 'awaiting_reconfirmation'
   | 'finalizing'
   | 'complete'
   | 'preview_stale'
