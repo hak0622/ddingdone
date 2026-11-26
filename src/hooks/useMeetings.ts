@@ -1,6 +1,9 @@
 import { useCallback, useSyncExternalStore } from 'react'
-import { collection, onSnapshot, query, where } from 'firebase/firestore'
+import { onSnapshot } from 'firebase/firestore'
 import { db } from '../lib/firebase'
+import { meetingListQuery, PAGE_SIZE, type MeetingListScope } from '../lib/meetingListQuery'
+export type { HistoryPage, MeetingStatusFilter } from '../lib/meetingListQuery'
+import { useUserStore } from '../store/userStore'
 import { forgetMeetingPhoto } from './useMeetingPhoto'
 
 export interface MeetingListItem {
@@ -14,112 +17,132 @@ export interface MeetingListItem {
   photoAccessConfirmed?: boolean
 }
 
-interface ListState {
-  meetings: MeetingListItem[]
-  loading: boolean
-}
-
-interface CacheEntry {
-  state: ListState
-  listeners: Set<() => void>
-  unsub: (() => void) | null
-  teardownTimer: ReturnType<typeof setTimeout> | null
-}
-
-// 홈 탭과 내역 탭이 같은 "내 모임 목록"을 각자 구독하면, 두 탭을 오갈 때마다
-// 매번 다시 읽어들이게 된다. uid 하나당 구독을 하나만 유지하고 공유한다.
 const GRACE_PERIOD_MS = 30_000
-const cache = new Map<string, CacheEntry>()
+const pending = { meetings: [] as MeetingListItem[], loading: true, error: false, hasPrevious: false, hasNext: false }
+const idle = { ...pending, loading: false }
 
-const IDLE_STATE: ListState = { meetings: [], loading: false }
+interface Entry {
+  uid: string
+  key: string
+  state: typeof pending
+  subscribers: Set<() => void>
+  stop?: () => void
+  timer?: ReturnType<typeof setTimeout>
+}
 
-export function clearMeetingsCache(): void {
-  for (const entry of cache.values()) {
-    if (entry.teardownTimer) clearTimeout(entry.teardownTimer)
-    entry.unsub?.()
-    entry.listeners.clear()
+const lists = new Map<MeetingListScope['kind'], Entry>()
+const views = new Map<string, unknown>()
+const viewListeners = new Set<() => void>()
+
+function dispose(kind: MeetingListScope['kind'], entry: Entry) {
+  clearTimeout(entry.timer)
+  entry.stop?.()
+  if (lists.get(kind) === entry) lists.delete(kind)
+}
+
+export function clearMeetingsCache() {
+  for (const [kind, entry] of lists) {
+    dispose(kind, entry)
+    entry.state = idle
+    entry.subscribers.forEach((notify) => notify())
   }
-  cache.clear()
+  views.clear()
+  viewListeners.forEach((notify) => notify())
 }
 
-function notify(entry: CacheEntry) {
-  entry.listeners.forEach((l) => l())
+useUserStore.subscribe((next, previous) => {
+  if (next.uid !== previous.uid) clearMeetingsCache()
+})
+
+export function useMeetingListView<T>(uid: string, kind: MeetingListScope['kind'], defaultView: T) {
+  const key = JSON.stringify([uid, kind])
+  const subscribe = useCallback((notify: () => void) => {
+    viewListeners.add(notify)
+    return () => { viewListeners.delete(notify) }
+  }, [])
+  const getSnapshot = useCallback(() => (views.get(key) as T | undefined) ?? defaultView, [key, defaultView])
+  const view = useSyncExternalStore(subscribe, getSnapshot)
+  function setView(next: T) {
+    if (!uid) return
+    views.set(key, next)
+    viewListeners.forEach((notify) => notify())
+  }
+  return [view, setView] as const
 }
 
-function startListening(uid: string, entry: CacheEntry) {
-  const q = query(collection(db, 'meetings'), where('memberUids', 'array-contains', uid))
-  entry.unsub = onSnapshot(
-    q,
-    { includeMetadataChanges: true },
-    (snap) => {
-      const results: MeetingListItem[] = snap.docs.map((d) => {
-        const data = d.data()
-        return {
-          id: d.id,
-          name: data.name,
-          date: data.date,
-          memberCount: data.memberUids?.length ?? 0,
-          totalAmount: data.totalAmount ?? 0,
-          status: data.status ?? 'active',
-          photoVersion: data.photoVersion ?? null,
-          photoAccessConfirmed: !snap.metadata.fromCache && !d.metadata.hasPendingWrites,
-        }
-      })
-      results.sort((a, b) => (a.date < b.date ? 1 : -1))
-      const currentIds = new Set(results.map((meeting) => meeting.id))
-      for (const meeting of entry.state.meetings) {
-        if (!currentIds.has(meeting.id)) forgetMeetingPhoto(uid, meeting.id)
+function startListening(entry: Entry, scope: MeetingListScope) {
+  entry.stop?.()
+  let current = true
+
+  function update(state: typeof pending) {
+    entry.state = state
+    entry.subscribers.forEach((notify) => notify())
+  }
+
+  update(pending)
+  const unsubscribe = onSnapshot(meetingListQuery(db, entry.uid, scope), { includeMetadataChanges: true }, (snap) => {
+    if (!current) return
+    const before = scope.kind === 'history' && scope.page?.direction === 'before'
+    const hasExtra = snap.size > PAGE_SIZE
+    const documents = scope.kind !== 'history' ? snap.docs
+      : before ? snap.docs.slice(-PAGE_SIZE) : snap.docs.slice(0, PAGE_SIZE)
+    const meetings = documents.map((doc) => {
+      const data = doc.data()
+      return {
+        id: doc.id, name: data.name, date: data.date, status: data.status ?? 'active',
+        memberCount: data.memberUids?.length ?? 0, totalAmount: data.totalAmount ?? 0,
+        photoVersion: data.photoVersion ?? null,
+        photoAccessConfirmed: !snap.metadata.fromCache && !doc.metadata.hasPendingWrites,
       }
-      entry.state = { meetings: results, loading: false }
-      notify(entry)
-    },
-    () => {
-      for (const meeting of entry.state.meetings) forgetMeetingPhoto(uid, meeting.id)
-      entry.state = { meetings: [], loading: false }
-      notify(entry)
-    },
-  )
+    })
+    // Use cached data only for an already-open view. A new view waits for the server.
+    if (snap.metadata.fromCache && entry.state.loading) return
+    update({
+      meetings, loading: false, error: false,
+      hasPrevious: scope.kind === 'history' && (before ? hasExtra : !!scope.page),
+      hasNext: scope.kind === 'history' && (before || hasExtra),
+    })
+  }, () => {
+    if (!current) return
+    for (const { id } of entry.state.meetings) forgetMeetingPhoto(entry.uid, id)
+    update({ ...idle, error: true })
+  })
+  entry.stop = () => { current = false; unsubscribe() }
 }
 
-function getOrCreateEntry(uid: string): CacheEntry {
-  const existing = cache.get(uid)
-  if (existing) return existing
-  const entry: CacheEntry = { state: { meetings: [], loading: true }, listeners: new Set(), unsub: null, teardownTimer: null }
-  cache.set(uid, entry)
-  startListening(uid, entry)
-  return entry
-}
-
-function subscribe(uid: string, callback: () => void): () => void {
-  const entry = getOrCreateEntry(uid)
-  if (entry.teardownTimer) {
-    clearTimeout(entry.teardownTimer)
-    entry.teardownTimer = null
-  }
-  entry.listeners.add(callback)
-  return () => {
-    entry.listeners.delete(callback)
-    if (entry.listeners.size === 0) {
-      entry.teardownTimer = setTimeout(() => {
-        entry.unsub?.()
-        cache.delete(uid)
-      }, GRACE_PERIOD_MS)
+export function useMeetings(uid: string, scope: MeetingListScope = { kind: 'legacy-history' }) {
+  const { kind } = scope
+  const key = JSON.stringify([uid, scope])
+  const subscribe = useCallback((notify: () => void) => {
+    if (!uid) return () => {}
+    const existing = lists.get(kind)
+    let entry = existing
+    if (!entry || entry.key !== key) {
+      if (existing) dispose(kind, existing)
+      entry = { uid, key, state: pending, subscribers: new Set() }
+      lists.set(kind, entry)
+      const [, selected] = JSON.parse(key) as [string, MeetingListScope]
+      startListening(entry, selected)
     }
+    const current = entry
+    clearTimeout(current.timer)
+    current.timer = undefined
+    current.subscribers.add(notify)
+    return () => {
+      current.subscribers.delete(notify)
+      if (lists.get(kind) === current && !current.subscribers.size) {
+        current.timer = setTimeout(() => dispose(kind, current), GRACE_PERIOD_MS)
+      }
+    }
+  }, [kind, key, uid])
+  const getSnapshot = useCallback(() => {
+    const entry = lists.get(kind)
+    return entry?.key === key ? entry.state : uid ? pending : idle
+  }, [kind, key, uid])
+  const state = useSyncExternalStore(subscribe, getSnapshot)
+  function retry() {
+    const entry = lists.get(kind)
+    if (entry?.key === key) startListening(entry, scope)
   }
-}
-
-export function useMeetings(uid: string) {
-  const subscribeFn = useCallback(
-    (callback: () => void) => {
-      if (!uid) return () => {}
-      return subscribe(uid, callback)
-    },
-    [uid],
-  )
-  const getSnapshot = useCallback(
-    () => (uid ? getOrCreateEntry(uid).state : IDLE_STATE),
-    [uid],
-  )
-
-  return useSyncExternalStore(subscribeFn, getSnapshot)
+  return { ...state, retry }
 }
