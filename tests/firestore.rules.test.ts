@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 import { readFile } from "node:fs/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildParticipantSnapshot, buildSettlementSnapshot, hashSettlementSnapshot } from "../src/utils/settlementSnapshot";
+import { buildParticipantSnapshot, buildSettlementSnapshot, buildV2SettlementSnapshot, hashSettlementSnapshot } from "../src/utils/settlementSnapshot";
 
 import { migrateParticipantRoom } from "../cloudflare/account-deletion/src/roomMigration";
 import { createRoom, roomOperation } from "../cloudflare/account-deletion/src/rooms";
@@ -466,6 +466,47 @@ describe("모임별 참여자 ID 권한", () => {
       await run("expense", makeExpense("lost"));
       expect((await current())?.totalAmount).toBe(1001);
       expect((await getDoc(lostRef)).data()).toEqual({ deleted: true, creationKey: "lost", creationHash });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("합계가 같은 분담 수정과 정산 확정은 일치하는 장부만 저장한다", async () => {
+    const { host, port } = emulatorAddress();
+    const realFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", (url: URL | string, options?: RequestInit) =>
+      realFetch(String(url).replace("https://firestore.googleapis.com", `http://${host}:${port}`), options));
+    try {
+      const id = crypto.randomUUID();
+      await createRoom(PROJECT_ID, "owner", USER_1, { roomId: id, name: "경합", date: "2026.11.24", memo: "", nickname: "사용자 1" });
+      const run = (action: string, body: Record<string, unknown> = {}, uid = USER_1) =>
+        roomOperation(PROJECT_ID, "owner", id, uid, action, body);
+      const { participantId: payer } = await run("access") as { participantId: string };
+      const { participantId: other } = await run("join", { nickname: "사용자 2" }, USER_2) as { participantId: string };
+      const initial = { expenseId: "expense", requestId: "expense", amount: 1000, category: "식비", memo: "", participantIds: [payer, other] };
+      await run("expense", { ...initial, action: "create" });
+
+      const member = testEnv.authenticatedContext(USER_1).firestore();
+      const room = doc(member, "meetings", id);
+      const expense = doc(room, "expenses", "expense");
+      const ledger = (async () => (await getDoc(expense)).data() as Parameters<typeof buildV2SettlementSnapshot>[1][number]);
+      const ids = [payer, other].sort();
+      const previousHash = await hashSettlementSnapshot(buildV2SettlementSnapshot(ids, [await ledger()]));
+      const [edit, settle] = await Promise.allSettled([
+        run("expense", { ...initial, action: "edit", revision: "expense", requestId: "edited", participantIds: [payer] }),
+        run("settle", { hash: previousHash }),
+      ]);
+      expect((await getDoc(room)).data()?.totalAmount).toBe(1000);
+      const latestHash = await hashSettlementSnapshot(buildV2SettlementSnapshot(ids, [await ledger()]));
+      if (settle.status === "fulfilled") {
+        expect(edit).toMatchObject({ status: "rejected", reason: { code: "ROOM_SETTLED" } });
+      } else {
+        expect(edit.status).toBe("fulfilled");
+        expect(settle.reason).toMatchObject({ code: "ROOM_CHANGED" });
+        expect(latestHash).not.toBe(previousHash);
+        await run("settle", { hash: latestHash });
+      }
+      expect((await getDoc(doc(room, "settlements", "final"))).data()).toMatchObject({ hash: latestHash, totalAmount: 1000 });
     } finally {
       vi.unstubAllGlobals();
     }
