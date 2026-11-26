@@ -138,9 +138,11 @@ export async function confirmWithdrawal(
 export async function getWithdrawalStatus(
   requestId: string,
   statusToken: string,
+  signal?: AbortSignal,
 ): Promise<WithdrawalStatus> {
   const response = await fetch(`${workerUrl()}/withdrawal/status/${encodeURIComponent(requestId)}`, {
     headers: statusToken ? { 'X-Withdrawal-Status-Token': statusToken } : await authHeaders(),
+    signal,
   })
   return parseResponse<WithdrawalStatus>(response)
 }

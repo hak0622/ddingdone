@@ -173,6 +173,7 @@ export default function AccountDeletion() {
   const [status, setStatus] = useState<WithdrawalStatus | null>(null)
   const [cleanupStatus, setCleanupStatus] = useState<LocalCleanupStatus>('idle')
   const cleanupStarted = useRef(false)
+  const refreshStatus = useRef<(() => void) | null>(null)
 
   const hasManualReview = Boolean(preview?.meetings.some((meeting) =>
     meeting.action !== 'preserve_participant_records' && (meeting.action !== 'delete_solo_room' || meeting.role === 'owner')))
@@ -181,31 +182,59 @@ export default function AccountDeletion() {
     if (!request) return
     const { requestId, statusToken } = request
     let cancelled = false
+    let terminal = false
+    let inFlight = false
+    let pollImmediately = false
+    let delay = 1000
     let timer: number | undefined
+    const controller = new AbortController()
+
+    function refresh() {
+      window.clearTimeout(timer)
+      if (cancelled || terminal || document.hidden) return
+      delay = 1000
+      if (inFlight) pollImmediately = true
+      else void poll()
+    }
 
     async function poll() {
+      if (cancelled || terminal || document.hidden || inFlight) return
+      inFlight = true
       const startedAt = performance.now()
       try {
-        const next = await getWithdrawalStatus(requestId, statusToken)
-        if (!cancelled) {
-          setStatus(next)
-          setError('')
-          if (!TERMINAL_STATUSES.has(next.status)) {
-            timer = window.setTimeout(poll, remainingPollDelay(startedAt, 1000))
-          }
-        }
+        const next = await getWithdrawalStatus(requestId, statusToken, controller.signal)
+        if (cancelled) return
+        terminal = TERMINAL_STATUSES.has(next.status)
+        setStatus(next)
+        setError('')
       } catch (pollError) {
         if (!cancelled) {
           setError(errorMessage(pollError))
-          timer = window.setTimeout(poll, remainingPollDelay(startedAt, 3000))
+          delay = Math.max(delay, 3000)
+        }
+      } finally {
+        inFlight = false
+        if (!cancelled && !terminal && !document.hidden) {
+          if (pollImmediately) {
+            pollImmediately = false
+            void poll()
+          } else {
+            timer = window.setTimeout(poll, remainingPollDelay(startedAt, delay))
+            delay = Math.min(delay * 2, 8000)
+          }
         }
       }
     }
 
+    refreshStatus.current = refresh
+    document.addEventListener('visibilitychange', refresh)
     void poll()
     return () => {
       cancelled = true
-      if (timer !== undefined) window.clearTimeout(timer)
+      controller.abort()
+      window.clearTimeout(timer)
+      document.removeEventListener('visibilitychange', refresh)
+      refreshStatus.current = null
     }
   }, [request])
 
@@ -266,6 +295,7 @@ export default function AccountDeletion() {
     setError('')
     try {
       await confirmWithdrawalScope(request.requestId, status.scopeRevision)
+      refreshStatus.current?.()
     } catch (confirmationError) {
       setError(errorMessage(confirmationError))
     } finally {
