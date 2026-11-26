@@ -133,6 +133,21 @@ describe("Firestore 탈퇴 잠금 규칙", () => {
     await testEnv.cleanup();
   });
 
+describe("모임 날짜 형식", () => {
+  it("날짜를 바꿀 때만 형식을 확인하고 기존 이름 수정은 허용한다", async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), "meetings/date-format"), {
+        memberUids: [USER_1], participantModelVersion: 2, status: "active", date: "2026/12/31",
+      });
+    });
+    const ref = doc(testEnv.authenticatedContext(USER_1).firestore(), "meetings/date-format");
+    await assertSucceeds(updateDoc(ref, { name: "수정" }));
+    await assertFails(updateDoc(ref, { date: "2027-01-01" }));
+    await assertFails(updateDoc(ref, { date: "2027.1.01" }));
+    await assertSucceeds(updateDoc(ref, { date: "2027.01.01" }));
+  });
+});
+
 describe("모임별 참여자 ID 권한", () => {
   async function seedParticipantRoom(version = 2) {
     await testEnv.withSecurityRulesDisabled(async (context) => {
