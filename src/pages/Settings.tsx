@@ -2,8 +2,6 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { TextField, Top } from '@toss/tds-mobile'
 import { COLORS } from '../styles/tokens'
-import { collection, doc, getDocs, query, where, writeBatch } from 'firebase/firestore'
-import { db } from '../lib/firebase'
 import { useUserStore } from '../store/userStore'
 
 const NICKNAME_KEY = 'ddingdone_nickname'
@@ -46,44 +44,25 @@ export default function Settings() {
   const navigate = useNavigate()
   const { uid, nickname, setUser } = useUserStore()
   const [value, setValue] = useState(nickname)
-  const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
-  const [syncError, setSyncError] = useState(false)
+  const [saveError, setSaveError] = useState(false)
 
-  async function handleSave() {
+  function handleSave() {
     const trimmed = value.trim()
     if (!trimmed || !uid) return
-    // 닉네임이 실제로 바뀌지 않았으면 내가 속한 모든 모임을 다시 읽고
-    // 멤버 문서를 전부 다시 쓰는 동기화 자체를 할 필요가 없다 — 그대로
-    // 저장 버튼을 누르기만 해도 매번 불필요한 읽기/쓰기가 나가고 있었다.
-    if (trimmed === nickname) {
-      setSaved(true)
-      setTimeout(() => setSaved(false), 2000)
-      return
-    }
-    setSaving(true)
     try {
       localStorage.setItem(NICKNAME_KEY, trimmed)
       setUser(uid, trimmed)
-
-      const q = query(collection(db, 'meetings'), where('memberUids', 'array-contains', uid))
-      const meetingsSnap = await getDocs(q)
-      const batch = writeBatch(db)
-      meetingsSnap.docs.forEach((meetingDoc) => {
-        batch.update(doc(db, 'meetings', meetingDoc.id, 'members', uid), { nickname: trimmed })
-      })
-      await batch.commit()
+      setSaveError(false)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch {
-      setSyncError(true)
-      setTimeout(() => setSyncError(false), 3000)
-    } finally {
-      setSaving(false)
+      setSaved(false)
+      setSaveError(true)
     }
   }
 
-  const canSave = value.trim().length > 0 && !saving
+  const canSave = value.trim().length > 0 && !!uid
 
   return (
     <>
@@ -122,11 +101,14 @@ export default function Settings() {
                 transition: 'background 0.2s',
               }}
             >
-              {saving ? '저장 중...' : saved ? '저장됐어요!' : '저장하기'}
+              {saved ? '저장됐어요!' : '저장하기'}
             </button>
-            {syncError && (
+            <p style={{ fontSize: 13, color: COLORS.textSecondary, margin: "12px 20px" }}>
+              변경한 닉네임은 앞으로 만들거나 참여하는 모임에 적용돼요.
+            </p>
+            {saveError && (
               <p style={{ fontSize: 13, color: '#ef4444', margin: '8px 0 0', textAlign: 'center' }}>
-                동기화에 실패했어요. 로컬에는 저장됐어요.
+                닉네임을 저장하지 못했어요. 다시 시도해 주세요.
               </p>
             )}
           </div>

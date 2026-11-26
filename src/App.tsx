@@ -2,8 +2,7 @@ import { useState, useEffect } from 'react'
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import ErrorBoundary from './components/ErrorBoundary'
 
-import { collection, doc, getDoc, getDocs, limit, query, where } from 'firebase/firestore'
-import { db, signInAnonymously } from './lib/firebase'
+import { signInAnonymously } from './lib/firebase'
 import { useUserStore } from './store/userStore'
 import BottomTabBar from './components/BottomTabBar'
 import Onboarding from './pages/Onboarding'
@@ -56,23 +55,7 @@ function AppInit() {
           return
         }
 
-        let nickname = localStorage.getItem(NICKNAME_KEY) ?? ''
-
-        if (!nickname) {
-          // Fallback: localStorage가 비어있어도 내가 속한 모임의 멤버 문서에서 닉네임 복구
-          try {
-            const q = query(collection(db, 'meetings'), where('memberUids', 'array-contains', uid), limit(1))
-            const snap = await getDocs(q)
-            if (!snap.empty) {
-              const memberDoc = await getDoc(doc(db, 'meetings', snap.docs[0].id, 'members', uid))
-              const fetched = memberDoc.exists() ? (memberDoc.data().nickname as string) : ''
-              if (fetched) {
-                nickname = fetched
-                localStorage.setItem(NICKNAME_KEY, fetched)
-              }
-            }
-          } catch { /* 조회 실패 시 onboarding으로 진행 */ }
-        }
+        const nickname = localStorage.getItem(NICKNAME_KEY) ?? ''
 
         setUser(uid, nickname)
         setReady(true)
