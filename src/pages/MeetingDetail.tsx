@@ -57,7 +57,7 @@ export default function MeetingDetail() {
   const { uid, nickname: myNickname } = useUserStore()
   const [failedPhotoSrc, setFailedPhotoSrc] = useState<string>()
   const [uploading, setUploading] = useState(false)
-  const [uploadError, setUploadError] = useState(false)
+  const [uploadError, setUploadError] = useState('')
   const [pendingFile, setPendingFile] = useState<File | null>(null)
   const [pendingPreview, setPendingPreview] = useState<string | null>(null)
   const [joinNickname, setJoinNickname] = useState('')
@@ -134,8 +134,13 @@ export default function MeetingDetail() {
       setPendingPreview(null)
     } catch (err) {
       console.error('사진 업로드 실패', err)
-      setUploadError(true)
-      setTimeout(() => setUploadError(false), 3000)
+      if (err instanceof Error && err.message === 'PHOTO_SAVE_UNCONFIRMED') {
+        handleCancelPhoto()
+        setUploadError('사진 저장 결과를 확인하지 못했어요. 현재 사진을 확인해 주세요.')
+      } else {
+        setUploadError('사진을 저장하지 못했어요. 다시 시도해 주세요.')
+      }
+      setTimeout(() => setUploadError(''), 3000)
     } finally {
       setUploading(false)
     }
@@ -639,7 +644,7 @@ export default function MeetingDetail() {
 
       {uploadError && (
         <p style={{ fontSize: 13, color: '#ef4444', textAlign: 'center', padding: '8px 20px', margin: 0, background: '#fff5f5' }}>
-          사진 업로드에 실패했어요. 다시 시도해주세요.
+          {uploadError}
         </p>
       )}
 

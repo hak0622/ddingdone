@@ -25,6 +25,19 @@ if (useFirebaseEmulators) {
   connectFirestoreEmulator(db, '127.0.0.1', 8080)
 }
 
+let photoClient: Promise<{
+  sdk: typeof import('firebase/firestore/lite')
+  firestore: import('firebase/firestore/lite').Firestore
+}> | undefined
+
+export function getPhotoClient() {
+  return photoClient ??= import('firebase/firestore/lite').then((sdk) => {
+    const firestore = sdk.getFirestore(app)
+    if (useFirebaseEmulators) sdk.connectFirestoreEmulator(firestore, '127.0.0.1', 8080)
+    return { sdk, firestore }
+  })
+}
+
 export async function signInAnonymously(): Promise<string> {
   const credential = await firebaseSignInAnonymously(auth)
   return credential.user.uid

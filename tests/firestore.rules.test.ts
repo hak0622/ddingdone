@@ -166,6 +166,7 @@ describe("모임별 참여자 ID 권한", () => {
     }
     await assertFails(coverBatch(204801))
     await assertFails(updateDoc(room, { photoVersion: version }))
+    await assertFails(setDoc(doc(room, "photos", "cover"), { version, bytes: Bytes.fromUint8Array(new Uint8Array(100)) }))
     await assertSucceeds(coverBatch(204800))
     const expense = doc(room, "expenses/expense-1")
     const metadata = () => updateDoc(expense, { memo: "확인", category: "식비", updatedAt: serverTimestamp(), revision: crypto.randomUUID() })
