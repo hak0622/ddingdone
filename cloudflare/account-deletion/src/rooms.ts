@@ -274,9 +274,9 @@ export async function changeExpense(store: RoomStore, path: string, room: Firest
       ...(creationHash === undefined ? {} : { creationHash }),
     }, Boolean(existing))
   }
-  store.write(path, {
-    totalAmount: Number(room.data.totalAmount) - oldAmount + newAmount,
-  }, true)
+  if (newAmount !== oldAmount) {
+    store.write(path, { totalAmount: Number(room.data.totalAmount) - oldAmount + newAmount }, true)
+  }
   return { expenseId }
 }
 

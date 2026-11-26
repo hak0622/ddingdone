@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { changeExpense, departRoom, joinRoom, type RoomStore } from './rooms'
 
 function fixture(uids = ['u1', 'u2'], participantModelVersion = 2) {
@@ -108,6 +108,23 @@ describe('v2 expense creation', () => {
     expect(docs.get(expensePath)).toBe(persisted)
     expect(docs.has(`${path}/expenses/other`)).toBe(false)
     expect((await room()).data.totalAmount).toBe(original.amount)
+  })
+
+  it('writes just the expense when a split changes without changing its amount', async () => {
+    const { store, path, room, docs } = fixture(['u1', 'u2', 'u3'])
+    const write = vi.spyOn(store, 'write')
+    await changeExpense(store, path, await room(), 'p1', original)
+    expect(write).toHaveBeenCalledTimes(2)
+    write.mockClear()
+    await changeExpense(store, path, await room(), 'p1', {
+      ...original, action: 'edit', participantIds: ['p1', 'p3'], revision: original.requestId, requestId: 'edit',
+    })
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(write.mock.calls[0][0]).toBe(`${path}/expenses/expense`)
+    expect(docs.get(`${path}/expenses/expense`)?.shares).toEqual([
+      { participantId: 'p1', amount: 501 }, { participantId: 'p3', amount: 500 },
+    ])
+    expect((await room()).data.totalAmount).toBe(1001)
   })
 
   it('preserves the original fingerprint through editing and deletion without restoring the expense', async () => {
