@@ -9,11 +9,15 @@ import { useUserStore } from '../store/userStore'
 
 export default function MeetingEdit() {
   const { id } = useParams<{ id: string }>()
+  const uid = useUserStore((state) => state.uid)
+  return <MeetingEditForm key={JSON.stringify([uid, id])} id={id} uid={uid} />
+}
+
+function MeetingEditForm({ id, uid }: { id?: string; uid: string }) {
   const navigate = useNavigate()
-  const { uid } = useUserStore()
   // MeetingDetail 등 같은 모임을 보는 다른 화면과 구독을 공유한다 — 이 화면만을
   // 위해 모임 문서를 또 getDoc으로 읽지 않는다.
-  const { meeting, members, loading: meetingLoading, error: meetingError, access } = useMeeting(id)
+  const { meeting, loading: meetingLoading, error: meetingError, access } = useMeeting(id, 'metadata')
 
   const [name, setName] = useState('')
   const [date, setDate] = useState('')
@@ -21,8 +25,10 @@ export default function MeetingEdit() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [loaded, setLoaded] = useState(false)
-  const [loadError, setLoadError] = useState(false)
-  const [notMember, setNotMember] = useState(false)
+  const canEdit = !meetingLoading && !meetingError && !!access?.participantId &&
+    meeting?.status === 'active' && meeting.memberUids.includes(uid)
+  const loadError = !meetingLoading && (meetingError || !meeting)
+  const notMember = !meetingLoading && !loadError && !canEdit
 
   // 폼 입력값은 처음 들어왔을 때 한 번만 채운다 — 실시간 구독이라 그 뒤에
   // 데이터가 갱신될 때마다(예: 다른 사람이 동시에 수정) 입력 중인 값을
@@ -32,19 +38,22 @@ export default function MeetingEdit() {
   // 아무것도 안 바꾸고 수정하기를 눌러도 불필요한 쓰기가 나가지 않게 한다.
   const originalRef = useRef({ name: '', date: '', memo: '' })
   useEffect(() => {
-    if (meetingLoading || seededRef.current) return
-    if (meetingError || !meeting) { setLoadError(true); return }
-    if (!members[access?.participantId ?? '']) { setNotMember(true); return }
+    if (!canEdit || !meeting) {
+      seededRef.current = false
+      setLoaded(false)
+      return
+    }
+    if (seededRef.current) return
     setName(meeting.name ?? '')
     setDate(meeting.date ?? '')
     setMemo(meeting.memo ?? '')
     setLoaded(true)
     originalRef.current = { name: meeting.name ?? '', date: meeting.date ?? '', memo: meeting.memo ?? '' }
     seededRef.current = true
-  }, [meetingLoading, meeting, meetingError, members, uid, access])
+  }, [canEdit, meeting])
 
   async function handleSubmit() {
-    if (!id || !name.trim() || submitting) return
+    if (!id || !canEdit || !loaded || !name.trim() || !isDateValid || submitting) return
     const trimmedName = name.trim()
     const original = originalRef.current
     // 이름/날짜/메모 중 실제로 바뀐 게 하나도 없으면 Firestore에 쓸 필요가 없다.
@@ -150,7 +159,7 @@ export default function MeetingEdit() {
           {error}
         </p>
       )}
-      <FixedBottomCTA disabled={!name.trim() || !isDateValid || submitting} onClick={handleSubmit}>
+      <FixedBottomCTA disabled={!canEdit || !loaded || !name.trim() || !isDateValid || submitting} onClick={handleSubmit}>
         {submitting ? '수정 중...' : '수정하기'}
       </FixedBottomCTA>
     </>

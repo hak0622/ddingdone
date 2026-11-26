@@ -121,6 +121,17 @@ it.each([['active', 'none'], ['settled', 'active']] as const)('직접 진입 시
   expect(callsFor('/expenses')).toHaveLength(0)
 })
 
+it('모임 정보 수정은 접근 확인만 하고 참여자와 지출을 조회하지 않는다', async () => {
+  await openRoom('active', 'metadata')
+  expect(container.textContent).toBe('모임')
+  expect(callsFor('/participants')).toHaveLength(0)
+  expect(callsFor('/expenses')).toHaveLength(0)
+
+  act(() => root.render(<Probe meetingId="room" mode="none" />))
+  expect(callsFor('/participants')).toHaveLength(1)
+  expect(request).toHaveBeenCalledTimes(1)
+})
+
 it('초대 링크 비멤버와 이전 계정의 늦은 응답에 지출을 노출하지 않는다', async () => {
   request.mockResolvedValue({ mode: 'participants', modelVersion: 2, name: '초대', canJoin: true })
   act(() => root.render(<Probe meetingId="room" />))
