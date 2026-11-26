@@ -5,7 +5,6 @@ export type MeetingCursor = readonly [date: string, id: string]
 export type HistoryPage = { direction: 'after' | 'before'; cursor: MeetingCursor }
 export type MeetingListScope =
   | { kind: 'home'; start: string; end: string }
-  | { kind: 'legacy-history' }
   | { kind: 'history'; filter: MeetingStatusFilter; newest: boolean; page: HistoryPage | null }
 
 export const PAGE_SIZE = 20
@@ -13,7 +12,7 @@ export function meetingListQuery(db: Firestore, uid: string, scope: MeetingListS
   const constraints: QueryConstraint[] = [where('memberUids', 'array-contains', uid)]
   if (scope.kind === 'home') {
     constraints.push(where('date', '>=', scope.start), where('date', '<', scope.end), orderBy('date', 'asc'))
-  } else if (scope.kind === 'history') {
+  } else {
     if (scope.filter !== 'all') constraints.push(where('status', '==', scope.filter))
     const direction = scope.newest ? 'desc' : 'asc'
     constraints.push(orderBy('date', direction), orderBy(documentId(), direction))

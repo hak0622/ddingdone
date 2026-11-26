@@ -84,7 +84,7 @@ function startListening(entry: Entry, scope: MeetingListScope) {
     if (!current) return
     const before = scope.kind === 'history' && scope.page?.direction === 'before'
     const hasExtra = snap.size > PAGE_SIZE
-    const documents = scope.kind !== 'history' ? snap.docs
+    const documents = scope.kind === 'home' ? snap.docs
       : before ? snap.docs.slice(-PAGE_SIZE) : snap.docs.slice(0, PAGE_SIZE)
     const meetings = documents.map((doc) => {
       const data = doc.data()
@@ -110,7 +110,7 @@ function startListening(entry: Entry, scope: MeetingListScope) {
   entry.stop = () => { current = false; unsubscribe() }
 }
 
-export function useMeetings(uid: string, scope: MeetingListScope = { kind: 'legacy-history' }) {
+export function useMeetings(uid: string, scope: MeetingListScope) {
   const { kind } = scope
   const key = JSON.stringify([uid, scope])
   const subscribe = useCallback((notify: () => void) => {

@@ -6,6 +6,10 @@ import {
 } from "@firebase/rules-unit-testing";
 import {
   Bytes,
+  collection,
+  getDocsFromServer,
+  query,
+  where,
   deleteDoc,
   doc,
   getDoc,
@@ -20,6 +24,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { buildParticipantSnapshot, buildSettlementSnapshot, buildV2SettlementSnapshot, hashSettlementSnapshot } from "../src/utils/settlementSnapshot";
 
 import { migrateParticipantRoom } from "../cloudflare/account-deletion/src/roomMigration";
+import { meetingListQuery, PAGE_SIZE } from "../src/lib/meetingListQuery";
 import { createRoom, roomOperation } from "../cloudflare/account-deletion/src/rooms";
 
 const PROJECT_ID = "ddingdone-test";
@@ -133,7 +138,58 @@ describe("Firestore 탈퇴 잠금 규칙", () => {
     await testEnv.cleanup();
   });
 
-describe("모임 날짜 형식", () => {
+describe("모임 목록 범위와 커서", () => {
+  it.each([5, 100])("모임 %i개의 선택 월·내역 페이지를 서버에서 제한해 조회한다", async (count) => {
+    const uid = "list-user";
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore();
+      const batch = writeBatch(db);
+      for (let i = 0; i < count; i++) {
+        batch.set(doc(db, "meetings", `list-${String(i).padStart(3, "0")}`), {
+          memberUids: [uid], status: i % 2 ? "settled" : "active",
+          date: i % 10 === 0 ? "2027.01.01" : "2026.12.31",
+        });
+      }
+      batch.set(doc(db, "meetings", "list-other"), { memberUids: ["other"], date: "2027.01.01", status: "active" });
+      await batch.commit();
+    });
+    const db = testEnv.authenticatedContext(uid).firestore();
+    const baseline = await getDocsFromServer(query(collection(db, "meetings"), where("memberUids", "array-contains", uid)));
+    const january = await getDocsFromServer(meetingListQuery(db, uid, { kind: "home", start: "2027.01.01", end: "2027.02.01" }));
+    const empty = await getDocsFromServer(meetingListQuery(db, uid, { kind: "home", start: "2027.02.01", end: "2027.03.01" }));
+    expect(baseline.size).toBe(count);
+    expect(january.size).toBe(Math.ceil(count / 10));
+    expect(empty.size).toBe(0);
+    const scope = { kind: "history", filter: "all", newest: true, page: null } as const;
+    const first = await getDocsFromServer(meetingListQuery(db, uid, scope));
+    expect(first.size).toBe(Math.min(count, PAGE_SIZE + 1));
+    console.info("list-query documents", { baseline: baseline.size, january: january.size, firstPage: first.size, twoRetainedScopes: january.size + first.size });
+    await assertFails(getDocsFromServer(meetingListQuery(db, "other", scope)));
+    const oldest = await getDocsFromServer(meetingListQuery(db, uid, { ...scope, filter: "settled", newest: false }));
+    expect(oldest.docs.every((snapshot) => snapshot.data().status === "settled")).toBe(true);
+    if (count <= PAGE_SIZE) return;
+    const visited: string[] = [];
+    let current = first;
+    let second = first;
+    while (true) {
+      const visible = current.docs.slice(0, PAGE_SIZE);
+      visited.push(...visible.map(({ id }) => id));
+      if (current.size <= PAGE_SIZE) break;
+      const last = visible[visible.length - 1]!;
+      current = await getDocsFromServer(meetingListQuery(db, uid, {
+        ...scope, page: { direction: "after", cursor: [last.data().date, last.id] },
+      }));
+      if (visited.length === PAGE_SIZE) second = current;
+    }
+    expect(new Set(visited).size).toBe(count);
+    expect(visited).toHaveLength(count);
+    const firstOfSecond = second.docs[0]!;
+    const previous = await getDocsFromServer(meetingListQuery(db, uid, {
+      ...scope, page: { direction: "before", cursor: [firstOfSecond.data().date, firstOfSecond.id] },
+    }));
+    expect(previous.docs.map(({ id }) => id)).toEqual(first.docs.slice(0, PAGE_SIZE).map(({ id }) => id));
+  });
+
   it("날짜를 바꿀 때만 형식을 확인하고 기존 이름 수정은 허용한다", async () => {
     await testEnv.withSecurityRulesDisabled(async (context) => {
       await setDoc(doc(context.firestore(), "meetings/date-format"), {

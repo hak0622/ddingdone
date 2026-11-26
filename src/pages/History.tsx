@@ -1,149 +1,114 @@
-import { useMemo, useState } from 'react'
+import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Asset, Top } from '@toss/tds-mobile'
+import { Top } from '@toss/tds-mobile'
 import { useUserStore } from '../store/userStore'
-import { useMeetings } from '../hooks/useMeetings'
+import { useMeetingListView, useMeetings, type HistoryPage, type MeetingStatusFilter } from '../hooks/useMeetings'
 import MeetingCard from '../components/MeetingCard'
 import { COLORS } from '../styles/tokens'
 
-type FilterStatus = 'all' | 'active' | 'settled'
-
-function parseDate(d: string) {
-  return Number(d.replace(/\./g, ''))
+const firstPage = {
+  filter: 'all' as MeetingStatusFilter,
+  newest: true,
+  page: null as HistoryPage | null,
 }
 
 export default function History() {
   const navigate = useNavigate()
   const { uid } = useUserStore()
-  const { meetings, loading } = useMeetings(uid)
-  const [filter, setFilter] = useState<FilterStatus>('all')
-  const [sortNewest, setSortNewest] = useState(true)
+  const [view, setView] = useMeetingListView(uid, 'history', firstPage)
+  const { filter, newest: sortNewest, page } = view
+  const { meetings, loading, error, retry, hasPrevious, hasNext } = useMeetings(uid, { kind: 'history', ...view })
 
-  const activeCount = meetings.filter((m) => m.status === 'active').length
-  const settledCount = meetings.filter((m) => m.status === 'settled').length
+  useEffect(() => {
+    if (page && !loading && !error && meetings.length === 0) setView({ ...view, page: null })
+  }, [page, loading, error, meetings.length, view, setView])
 
-  const filtered = useMemo(() =>
-    meetings
-      .filter((m) => filter === 'all' || m.status === filter)
-      .sort((a, b) =>
-        sortNewest
-          ? parseDate(b.date) - parseDate(a.date)
-          : parseDate(a.date) - parseDate(b.date)
-      ),
-    [meetings, filter, sortNewest]
-  )
+  function movePage(direction: HistoryPage['direction']) {
+    const boundary = direction === 'after' ? meetings[meetings.length - 1] : meetings[0]
+    if (boundary) setView({ ...view, page: { direction, cursor: [boundary.date, boundary.id] } })
+  }
 
   return (
     <>
       <Top title={<Top.TitleParagraph size={22}>내역</Top.TitleParagraph>} />
 
-      {loading ? (
+      <div style={{ padding: '0 20px 80px' }}>
+        {/* 필터 + 정렬 바 */}
         <div
           style={{
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center',
-            height: 'calc(100vh - 56px - 60px)',
+            justifyContent: 'space-between',
+            padding: '12px 0 16px',
           }}
         >
-          <p style={{ fontSize: 14, color: COLORS.textSecondary, margin: 0 }}>불러오는 중...</p>
-        </div>
-      ) : meetings.length === 0 ? (
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            height: 'calc(100vh - 56px - 60px)',
-            gap: 0,
-          }}
-        >
-          <div style={{ width: 80, height: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', alignSelf: 'center', marginBottom: 16 }}>
-            <Asset.Icon
-              frameShape={Asset.frameShape.CleanW100}
-              backgroundColor="transparent"
-              name="icon-calendar-clock"
-              aria-hidden={true}
-              ratio="1/1"
-            />
+          <div style={{ display: 'flex', gap: 6 }}>
+            {([
+              ['all', '전체'],
+              ['active', '진행중'],
+              ['settled', '완료'],
+            ] as [MeetingStatusFilter, string][]).map(([f, label]) => (
+              <button
+                key={f}
+                onClick={() => setView({ ...view, filter: f, page: null })}
+                style={{
+                  padding: '5px 12px',
+                  borderRadius: 20,
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  background: filter === f ? COLORS.primary : COLORS.backgroundGray,
+                  color: filter === f ? COLORS.background : COLORS.textSecondary,
+                }}
+              >
+                {label}
+              </button>
+            ))}
           </div>
-          <p style={{ fontSize: 22, fontWeight: 700, margin: '0 0 12px', color: '#191919' }}>아직 정산방이 없어요</p>
-          <p style={{ fontSize: 15, color: '#8b8b8b', margin: 0 }}>
-            홈 탭에서 첫 정산방을 만들어보세요
-          </p>
-        </div>
-      ) : (
-        <div style={{ padding: '0 20px 80px' }}>
-          {/* 필터 + 정렬 바 */}
-          <div
+          <button
+            onClick={() => setView({ ...view, newest: !sortNewest, page: null })}
             style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              fontSize: 12,
+              fontWeight: 600,
+              color: COLORS.textSecondary,
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '12px 0 16px',
+              gap: 2,
+              padding: 0,
             }}
           >
-            <div style={{ display: 'flex', gap: 6 }}>
-              {([
-                ['all', `전체(${meetings.length})`],
-                ['active', `진행중(${activeCount})`],
-                ['settled', `완료(${settledCount})`],
-              ] as [FilterStatus, string][]).map(([f, label]) => (
-                <button
-                  key={f}
-                  onClick={() => setFilter(f)}
-                  style={{
-                    padding: '5px 12px',
-                    borderRadius: 20,
-                    border: 'none',
-                    cursor: 'pointer',
-                    fontSize: 13,
-                    fontWeight: 600,
-                    background: filter === f ? COLORS.primary : COLORS.backgroundGray,
-                    color: filter === f ? COLORS.background : COLORS.textSecondary,
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <button
-              onClick={() => setSortNewest((prev) => !prev)}
-              style={{
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                fontSize: 12,
-                fontWeight: 600,
-                color: COLORS.textSecondary,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 2,
-                padding: 0,
-              }}
-            >
-              {sortNewest ? '최신순' : '오래된순'}
-              <span style={{ fontSize: 10 }}>{sortNewest ? '↓' : '↑'}</span>
-            </button>
-          </div>
-
-          {/* 리스트 */}
-          {filtered.length === 0 ? (
-            <p style={{ fontSize: 14, color: COLORS.textMuted, textAlign: 'center', padding: '40px 0', margin: 0 }}>
-              해당하는 정산방이 없어요
-            </p>
-          ) : (
-            filtered.map((m) => (
-              <MeetingCard
-                key={m.id}
-                meeting={m}
-                onClick={() => navigate(`/meetings/${m.id}`)}
-              />
-            ))
-          )}
+            {sortNewest ? '최신순' : '오래된순'}
+            <span style={{ fontSize: 10 }}>{sortNewest ? '↓' : '↑'}</span>
+          </button>
         </div>
-      )}
+
+        {/* 리스트 */}
+        {loading ? <p role="status">불러오는 중이에요.</p>
+          : error ? <p role="alert">내역을 불러오지 못했어요. <button onClick={retry}>다시 시도</button></p>
+          : meetings.length === 0 ? (
+          <p style={{ fontSize: 14, color: COLORS.textMuted, textAlign: 'center', padding: '40px 0', margin: 0 }}>
+            해당하는 정산방이 없어요
+          </p>
+        ) : (
+          meetings.map((m) => (
+            <MeetingCard
+              key={m.id}
+              meeting={m}
+              onClick={() => navigate(`/meetings/${m.id}`)}
+            />
+          ))
+        )}
+        {!loading && !error && (hasPrevious || hasNext) && (
+          <nav aria-label="내역 페이지" style={{ display: 'flex', justifyContent: 'center', gap: 12, marginTop: 16 }}>
+            <button disabled={!hasPrevious} onClick={() => movePage('before')}>이전</button>
+            <button disabled={!hasNext} onClick={() => movePage('after')}>다음</button>
+          </nav>
+        )}
+      </div>
     </>
   )
 }
