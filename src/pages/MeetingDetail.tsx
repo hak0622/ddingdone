@@ -11,7 +11,7 @@ import { COLORS } from '../styles/tokens'
 import { saveMeetingPhoto } from '../lib/meetingPhoto'
 import { forgetMeetingPhoto, useMeetingPhoto } from '../hooks/useMeetingPhoto'
 import { shareInviteLink } from '../lib/bridge'
-import { refreshMeeting, useMeeting, type Expense } from '../hooks/useMeeting'
+import { forgetMeeting, refreshMeeting, useMeeting, type Expense } from '../hooks/useMeeting'
 import { useUserStore } from '../store/userStore'
 
 const CATEGORY_EMOJI: Record<string, string> = {
@@ -53,7 +53,7 @@ const MEMBER_CHIP_LIMIT = 3
 export default function MeetingDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { meeting, members, expenses, loading, error, participants, access } = useMeeting(id)
+  const { meeting, members, expenses, expensesReady, loading, error, participants, access } = useMeeting(id)
   const { uid, nickname: myNickname } = useUserStore()
   const [failedPhotoSrc, setFailedPhotoSrc] = useState<string>()
   const [uploading, setUploading] = useState(false)
@@ -157,7 +157,7 @@ export default function MeetingDetail() {
     try {
       await participantRoomRequest(id, 'leave', { participantId: myId })
       forgetMeetingPhoto(uid, id)
-      refreshMeeting(id)
+      forgetMeeting(id)
       navigate('/')
     } catch {
       showActionError('나가지 못했어요. 다시 시도해주세요.')
@@ -219,7 +219,7 @@ export default function MeetingDetail() {
     }
   }
 
-  if (loading) {
+  if (loading || (myId && !expensesReady && !error)) {
     return (
       <>
         <Top title={<Top.TitleParagraph size={22}>정산방</Top.TitleParagraph>} />

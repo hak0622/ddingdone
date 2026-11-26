@@ -18,7 +18,7 @@ import {
 export default function Settle() {
   const { id: meetingId } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { meeting, members, expenses, loading: meetingLoading, expensesReady, error: meetingError, participants, access } = useMeeting(meetingId)
+  const { meeting, members, expenses, loading: meetingLoading, expensesReady, error: meetingError, participants, access } = useMeeting(meetingId, 'active')
   const myId = access?.participantId ?? ''
   const isMember = !!members[myId]
   const isSettled = meeting?.status === 'settled'
@@ -32,24 +32,24 @@ export default function Settle() {
   const [settleError, setSettleError] = useState('')
 
   const liveSnapshot = useMemo(() =>
-    buildV2SettlementSnapshot(Object.keys(participants ?? {}), expenses),
-  [participants, expenses])
+    isSettled ? null : buildV2SettlementSnapshot(Object.keys(participants ?? {}), expenses),
+  [isSettled, participants, expenses])
 
-  const effectiveSnapshot = isSettled && storedSnapshot ? storedSnapshot : liveSnapshot
-  const settlements = useMemo(() => snapshotToSettlements(effectiveSnapshot, participants), [effectiveSnapshot, participants])
+  const effectiveSnapshot = isSettled ? storedSnapshot : liveSnapshot
+  const settlements = useMemo(() => effectiveSnapshot ? snapshotToSettlements(effectiveSnapshot, participants) : [], [effectiveSnapshot, participants])
   const manualSettlement = (id: string) => !participants?.[id]
-  const totalAmount = effectiveSnapshot.totalAmount
-  const memberCount = effectiveSnapshot.participantCount
+  const totalAmount = effectiveSnapshot?.totalAmount ?? 0
+  const memberCount = effectiveSnapshot?.participantCount ?? 0
   const perPerson = memberCount > 0 ? Math.floor(totalAmount / memberCount) : 0
-  const burdenTotals = effectiveSnapshot.participantBurdenTotals
+  const burdenTotals = effectiveSnapshot?.participantBurdenTotals
 
   const myPayments = settlements.filter((s) => s.from === myId)
   const myReceivables = settlements.filter((s) => s.to === myId)
-  const loading = meetingLoading || (isMember && !expensesReady) || (isMember && isSettled && snapshotLoading)
+  const loading = meetingLoading || (isMember && !isSettled && !expensesReady) || (isMember && isSettled && snapshotLoading)
   const error = meetingError || snapshotError || (isMember && isSettled && !snapshotLoading && !storedSnapshot)
 
   async function handleShare() {
-    if (!meeting) return
+    if (!meeting || !effectiveSnapshot) return
     const lines = [
       `[띵돈] ${meeting.name} 정산 결과`,
       `날짜 : ${meeting.date}`,
@@ -70,7 +70,7 @@ export default function Settle() {
   }
 
   async function handleSettle() {
-    if (!meetingId || !isMember || settling) return
+    if (!meetingId || !isMember || settling || !liveSnapshot) return
     setSettling(true)
     setSettleError('')
     try {

@@ -4,7 +4,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Top } from '@toss/tds-mobile'
 import { doc, serverTimestamp, runTransaction } from 'firebase/firestore'
 import { db } from '../lib/firebase'
-import { useMeeting } from '../hooks/useMeeting'
+import { useExpenseForEdit, useMeeting } from '../hooks/useMeeting'
 
 const CATEGORIES = [
   { id: '식비', emoji: '🍖' },
@@ -23,14 +23,11 @@ export default function ExpenseInput() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const editId = searchParams.get('editId')
-  // 정산 완료 여부, 수정할 비용 데이터 모두 같은 모임을 보고 있는 다른 화면
-  // (상세 등)과 공유되는 구독에서 그대로 가져온다 — 화면마다 따로 getDoc을
-  // 또 호출할 필요가 없다.
-  const { meeting, members, expenses, expensesReady, loading, error: meetingError, access } = useMeeting(meetingId)
-
+  const room = useMeeting(meetingId, 'none')
+  const { meeting, members, loading, error: meetingError, access } = room
+  const { expense: target, ready: targetReady, error: targetError } = useExpenseForEdit(meetingId, editId, room)
   const myId = access?.participantId ?? ''
   const currentIds = Object.keys(members).sort()
-  const target = expenses.find((expense) => expense.id === editId)
   const locked = !!target && [target.paidBy, ...(target.splitMemberUids ?? [])].some((id) => !members[id])
   const pendingCreation = useRef<{ action: string; expenseId: string; requestId: string; amount: number; category: string; memo: string; participantIds: string[] }>()
 
@@ -69,9 +66,8 @@ export default function ExpenseInput() {
   }, [loading, meeting, navigate])
 
   useEffect(() => {
-    if (!editId || !expensesReady || loading || !myId || seededRef.current === formKey) return
+    if (!editId || !targetReady || loading || !myId || seededRef.current === formKey) return
     seededRef.current = formKey
-    const target = expenses.find((e) => e.id === editId)
     // 존재하지 않거나 본인 비용이 아니면(다른 사람 비용 수정 링크에 직접
     // 들어온 경우 포함) 막는다 — 본인 비용만 수정할 수 있다.
     if (!target || target.createdBy !== myId) {
@@ -83,7 +79,7 @@ export default function ExpenseInput() {
     setCategory(target.category)
     originalRef.current = { category: target.category, memo: target.memo, splitMemberUids: target.splitMemberUids, revision: target.revision }
     setEditLoaded(true)
-  }, [editId, expenses, expensesReady, formKey, loading, myId, navigate])
+  }, [editId, target, targetReady, formKey, loading, myId, navigate])
 
   // 한 건당 지출은 999만 9999원까지만 받는다 — 친구끼리 더치페이하는 항목
   // 단위로는 충분히 넉넉한 한도이면서, 자릿수를 7자리로 고정해 입력창이
@@ -101,7 +97,7 @@ export default function ExpenseInput() {
   }
 
   async function handleSubmit() {
-    if (Number(amount) === 0 || !myId || !meetingId || submitting || splitInvalid || meetingError || !expensesReady) return
+    if (loading || Number(amount) === 0 || !myId || !meetingId || submitting || splitInvalid || meetingError || (editId && (!targetReady || targetError || target?.createdBy !== myId))) return
     if (editId) {
       const original = originalRef.current
       const unchanged = Number(amount) === originalAmount && category === original.category &&
@@ -145,7 +141,7 @@ export default function ExpenseInput() {
     }
   }
 
-  const isValid = Number(amount) > 0 && !submitting && editLoaded && !splitInvalid && !!myId && !meetingError && expensesReady
+  const isValid = !loading && Number(amount) > 0 && !submitting && editLoaded && !splitInvalid && !!myId && !meetingError && (!editId || (targetReady && !targetError && target?.createdBy === myId))
 
   return (
     <>
